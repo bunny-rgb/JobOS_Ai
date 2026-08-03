@@ -9,80 +9,20 @@
 #====================================================================================================
 
 user_problem_statement: |
-  Phase 3 UI polish + resume upload upgrade + tooltips:
-  1) Minimalist black/grey gradient UI (removed heavy blue accent; primary is now white/near-white).
-  2) Resume upload now accepts PDF, DOCX, TXT, MD via /api/profile/resume-upload (multipart).
-     Parses PDF with pdf-parse, DOCX with mammoth, stores text on user.resume_text and filename on user.resume_filename.
-  3) A ResumeUploader widget is on the Dashboard (front page after login) AND on Profile — drag&drop supported.
-  4) Tooltips (radix Tooltip) on all icon buttons — theme toggle, logout, logo, and all nav items.
-  5) Logo click routes to Dashboard when authenticated (main app page).
+  Phase 4 - Job platform upgrade:
+  1) Apply Now button - actually applies (opens recruiter URL) and moves to Applied stage.
+  2) AI-driven Resume Score tied to user's chosen target role (SDE, PM, etc.) - not a heuristic.
+     User can change target role on the Dashboard front page.
+  3) Real job aggregation from multiple free public APIs (Remotive, RemoteOK, Arbeitnow, Jobicy) with
+     pagination + infinite scroll. Total ~300+ jobs available at any time.
+  4) Country auto-detect via Cf-IPCountry / X-Vercel-IP-Country headers, salary shown in INR when country=IN,
+     manual country switcher in the Jobs page.
 
 backend:
-  - task: "Resume upload /api/profile/resume-upload (PDF/DOCX/TXT/MD)"
-    implemented: true
-    working: true
-    file: "app/api/[[...path]]/route.js"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-      - working: "NA"
-        agent: "main"
-        comment: |
-          POST multipart/form-data with `file` field. Server chooses parser by extension:
-            - .pdf -> pdf-parse
-            - .docx -> mammoth extractRawText
-            - .txt / .md -> utf8 buffer
-          Rejects size > 8MB (413) and unsupported extensions (400).
-          Saves resume_text (trimmed to 20k chars) and resume_filename on user, returns updated user + chars + filename.
-      - working: true
-        agent: "testing"
-        comment: |
-          ✅ COMPREHENSIVE TEST PASSED - unpdf migration successful!
-          
-          Tested with /app/test_resume_upload.py (12 test cases):
-          
-          FILE TYPE PARSING (ALL WORKING):
-          1. TXT upload: ✅ 200, 213 chars extracted
-          2. PDF upload: ✅ 200, 218 chars extracted (FIXED with unpdf!)
-             - Previously failed with "Object.defineProperty called on non-object"
-             - Now successfully extracts text: "John Doe Senior QA Automation Engineer 5+ years experience with Playwright, TypeScript, and Selenium..."
-             - Used pre-generated /tmp/test_resume.pdf
-          3. DOCX upload: ✅ 200, 194 chars extracted
-          4. MD upload: ✅ 200, 244 chars extracted
-          
-          ERROR HANDLING:
-          5. Unsupported file (.jpg): ✅ 400 "Unsupported file type .jpg"
-          6. Missing auth: ✅ 401 "Unauthorized"
-          7. Corrupt PDF: ✅ 400 "Could not parse PDF file: Invalid PDF structure."
-          
-          DATA PERSISTENCE:
-          8. GET /api/auth/me: ✅ 200, resume_text and resume_filename correctly saved
-          
-          SANITY CHECKS:
-          9. GET /api/dashboard/stats: ✅ 200
-          10. GET /api/jobs: ✅ 200, 8 jobs returned
-          
-          Minor: Test for missing file field with empty files={} returns 500 from Next.js formData() parser,
-          but real multipart requests with wrong/missing file field correctly return 400. Not a functional issue.
-
-  - task: "All Phase 1 + Phase 2 endpoints"
-    implemented: true
-    working: true
-    file: "app/api/[[...path]]/route.js"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-      - working: true
-        agent: "testing"
-        comment: "Auth, jobs, applications, dashboard, AI Match, AI Cover Letter, Interview, Google OAuth - all previously passed."
-
-frontend:
-  - task: "Minimalist black/grey UI + clickable logo + tooltips + resume upload widget"
+  - task: "Job aggregation from external APIs with pagination"
     implemented: true
     working: "NA"
-    file: "app/page.js, app/globals.css, app/providers.js"
+    file: "app/api/[[...path]]/route.js, lib/jobFetcher.js"
     stuck_count: 0
     priority: "high"
     needs_retesting: true
@@ -90,24 +30,112 @@ frontend:
       - working: "NA"
         agent: "main"
         comment: |
-          - Color palette re-tuned: black bg gradient, white primary, subtle border.
-          - TooltipProvider wraps app; NavBar icons (theme toggle, logout, logo, nav items) all show tooltips on hover.
-          - Logo becomes a button that calls onNav('dashboard') when authenticated.
-          - New ResumeUploader component (drag & drop + click) mounted:
-              a) On Dashboard as a "Your Resume" card at the top.
-              b) On Profile page as the primary resume input.
-          - Multipart POST to /api/profile/resume-upload with the file; updates local user in localStorage + state on success.
+          - New /lib/jobFetcher.js pulls from Remotive, RemoteOK, Arbeitnow, Jobicy (public, no key needed).
+          - POST /api/jobs/refresh triggers a hard refresh (bulk upsert to Mongo). Verified curl returns {refreshed: 331}.
+          - GET /api/jobs?page=1&limit=24&q=...&remote=true&country=IN&refresh=false returns
+            {jobs, page, limit, total, hasMore, country, currency, lastRefreshed}.
+          - Country filter respects seed 'country' field OR remote:true OR null country.
+          - Currency conversion helper: USD → INR when country=IN via USD_TO_INR (=83.5).
+          - Salary field added: salary_display alongside original salary.
+          - maybeRefreshJobs runs on GET /api/jobs when cache is stale (>1h) — fire and forget.
+
+  - task: "AI Resume Score for target role"
+    implemented: true
+    working: "NA"
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          POST /api/ai/resume-score {target_role, modelId}
+          Requires resume_text on user. Returns
+          {analysis:{score:0-100, verdict, matched_skills[], missing_skills[], strengths[],
+                     gaps[], keyword_hits, ats_notes, recommendation, improvements[]}, user}.
+          Persists to user.last_resume_analysis {target_role, modelId, analysis, at}.
+          Also updates user.target_role to the analyzed role.
+
+  - task: "Apply Now endpoint (Applications POST returns apply_url + accepts stage upgrade for duplicates)"
+    implemented: true
+    working: "NA"
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          POST /api/applications now returns {application, apply_url} — client opens URL in a new tab.
+          If a duplicate exists AND a new stage is provided, the existing app is upgraded to that stage
+          (e.g. Interested → Applied). If no stage change requested, 409 duplicate.
+
+  - task: "Geo detect endpoint /api/geo"
+    implemented: true
+    working: "NA"
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          GET /api/geo reads Cf-IPCountry / X-Vercel-IP-Country / X-Country headers and returns
+          {country, currency}. Defaults country="US" if no header present.
+
+  - task: "Profile PATCH accepts target_role/country/currency"
+    implemented: true
+    working: "NA"
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Extended allowed[] to include target_role, country, currency."
+
+frontend:
+  - task: "Jobs page: infinite scroll, country switcher, Apply Now button, salary display"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "IntersectionObserver on sentinel; ~24 jobs/page; hasMore controls further fetches. Country Select in header; 'Sync fresh jobs' button; per-card Apply Now button opens apply_url and moves app to Applied stage."
+
+  - task: "Dashboard: target role picker + AI Resume Score card"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "New Dashboard section: pick target role from 20+ options or type custom → 'Analyze resume' → shows score ring, verdict, matched/missing skills, and improvement bullets."
 
 metadata:
   created_by: "main_agent"
-  version: "3.0"
-  test_sequence: 2
-  run_ui: true
+  version: "4.0"
+  test_sequence: 3
+  run_ui: false
 
 test_plan:
   current_focus:
-    - "Resume upload /api/profile/resume-upload (PDF/DOCX/TXT/MD)"
-    - "Minimalist black/grey UI + clickable logo + tooltips + resume upload widget"
+    - "Job aggregation from external APIs with pagination"
+    - "AI Resume Score for target role"
+    - "Apply Now endpoint (Applications POST returns apply_url + accepts stage upgrade for duplicates)"
+    - "Geo detect endpoint /api/geo"
+    - "Profile PATCH accepts target_role/country/currency"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -115,26 +143,20 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Please test:
+      Phase 4 backend built. Please test:
 
-      BACKEND:
-      1) Auth: register a fresh user (unique email), grab token.
-      2) POST /api/profile/resume-upload with a TXT file (create in /tmp with a small resume paragraph). Multipart form field name is "file".
-         Assert 200, user.resume_text non-empty, chars > 0, filename matches upload.
-      3) POST /api/profile/resume-upload with a DOCX file - you'll need to build one; you can use python-docx (`pip install python-docx` then create a Document with a few paragraphs).
-         Assert 200 and text extracted.
-      4) POST /api/profile/resume-upload with a PDF file - use reportlab to generate a small PDF with a few strings of resume content.
-         Assert 200 and text extracted.
-      5) POST with an unsupported extension (.jpg) — assert 400.
-      6) POST without file field — assert 400.
-      7) POST without auth header — assert 401.
+      1) POST /api/jobs/refresh -> {refreshed: > 100}
+      2) GET /api/jobs -> {jobs: array (len==limit or fewer), total > 200, hasMore: boolean, currency, country, lastRefreshed:string}
+      3) GET /api/jobs?page=2 -> different subset
+      4) GET /api/jobs?q=engineer&remote=true -> filtered
+      5) GET /api/jobs?country=IN -> jobs where country==IN OR remote or country==null
+      6) GET /api/geo -> {country:"US" default, currency:"USD"}
+      7) POST /api/ai/resume-score with target_role="Product Manager" and modelId="gemini-flash-latest" AFTER uploading a resume via /api/profile/resume-upload — expect {analysis:{score, verdict, matched_skills, missing_skills, strengths, gaps, keyword_hits, ats_notes, recommendation, improvements}, user}
+      8) POST /api/ai/resume-score without a resume_text on user -> 400
+      9) POST /api/applications {jobId, stage:'interested'} -> {application, apply_url:string|null}
+      10) POST /api/applications {jobId (same), stage:'applied'} -> should upgrade stage, returns {application, apply_url, updated:true}
+      11) POST /api/applications {jobId (same), stage:'interested'} again with same stage -> 409
+      12) PATCH /api/profile {target_role:"Data Scientist", country:"IN"} -> user reflects both
+      13) Sanity: /api/dashboard/stats, /api/models, /api/interview/rounds, /api/auth/me all still 200.
 
-      Also do a quick sanity re-check that /api/dashboard/stats and /api/jobs still work post-changes.
-
-      FRONTEND (only after backend passes):
-      1) Landing page renders in the new minimalist black/grey look.
-      2) Hover over the "J" logo when logged in — tooltip "Go to Dashboard" appears.
-      3) Hover over LogOut icon — tooltip "Sign out" appears.
-      4) Click the "J" logo when on Jobs/Tracker/Interview page — should navigate back to Dashboard.
-      5) On Dashboard, the "Your Resume" card is present with a "Choose file" button. Upload a small .txt file — success toast, filename shown, chars parsed shown.
-      6) On Profile, the same ResumeUploader is present and also uploads.
+      Use unique test email each run. LLM calls up to 60s.

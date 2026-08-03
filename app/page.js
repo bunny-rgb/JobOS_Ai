@@ -397,18 +397,61 @@ function AuthDialog({ open, onOpenChange, onAuth }) {
 }
 
 // ---------- Dashboard ----------
-function Dashboard({ token, user, setUser, onNav }) {
+function Dashboard({ token, user, setUser, onNav, models, defaultModel }) {
   const [stats, setStats] = useState(null)
+  const [targetRole, setTargetRole] = useState(user.target_role || user.title || 'Software Engineer')
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analysis, setAnalysis] = useState(user.last_resume_analysis?.analysis || null)
+
   useEffect(() => {
     api('/dashboard/stats', { token }).then(setStats).catch(() => {})
   }, [token])
 
+  useEffect(() => {
+    if (user.last_resume_analysis?.analysis && !analysis) setAnalysis(user.last_resume_analysis.analysis)
+  }, [user])
+
+  const runAnalysis = async (role) => {
+    const r = (role ?? targetRole).trim()
+    if (!r) return toast.error('Pick a target role first')
+    if (!user.resume_text || user.resume_text.length < 40) {
+      return toast.error('Upload a resume before running analysis')
+    }
+    setAnalyzing(true)
+    try {
+      const d = await api('/ai/resume-score', {
+        token, method: 'POST',
+        body: { target_role: r, modelId: user.preferred_model || defaultModel }
+      })
+      setAnalysis(d.analysis)
+      setUser(d.user); localStorage.setItem('jobos_user', JSON.stringify(d.user))
+      toast.success(`Analysis complete — ${d.analysis?.score ?? '?'}/100 for ${r}`)
+    } catch (e) { toast.error(e.message) }
+    finally { setAnalyzing(false) }
+  }
+
+  const ROLES = [
+    'Software Engineer', 'Senior Software Engineer', 'Full Stack Developer', 'Frontend Engineer', 'Backend Engineer',
+    'QA Engineer', 'SDET / Automation Engineer', 'Manual Tester',
+    'Product Manager', 'Senior Product Manager', 'Growth Product Manager',
+    'Data Engineer', 'Data Scientist', 'ML Engineer',
+    'DevOps Engineer', 'Site Reliability Engineer', 'Cloud Engineer',
+    'UX Designer', 'Product Designer',
+    'Cybersecurity Engineer', 'Security Analyst',
+    'Technical Program Manager', 'Engineering Manager',
+  ]
+
+  const aiScore = analysis?.score
   const cards = [
     { label: 'Applications', value: stats?.stats?.total ?? 0, icon: Briefcase },
     { label: 'Interviews', value: stats?.stats?.interview ?? 0, icon: Target },
     { label: 'Offers', value: stats?.stats?.offer ?? 0, icon: Trophy },
-    { label: 'Resume Score', value: `${stats?.resume_score ?? 0}%`, icon: FileText },
+    { label: 'AI Resume Score', value: aiScore != null ? `${aiScore}%` : `${stats?.resume_score ?? 0}%`, icon: FileText },
   ]
+
+  const verdictColor = (v) => v?.startsWith('Excellent') || v?.startsWith('Strong') ? 'text-green-500'
+    : v?.startsWith('Solid') ? 'text-amber-500' : 'text-red-500'
+
   return (
     <div className="container mx-auto px-6 py-8 max-w-7xl">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -421,7 +464,7 @@ function Dashboard({ token, user, setUser, onNav }) {
             <TooltipTrigger asChild>
               <Button onClick={() => onNav('jobs')}><Sparkles className="mr-2 h-4 w-4" /> Discover Jobs</Button>
             </TooltipTrigger>
-            <TooltipContent>Browse AI-ranked opportunities</TooltipContent>
+            <TooltipContent>Browse live jobs matched to your role</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -450,19 +493,101 @@ function Dashboard({ token, user, setUser, onNav }) {
         ))}
       </div>
 
-      {/* Resume Upload widget — front & center on dashboard */}
+      {/* Target Role + AI Resume Score */}
       <Card className="card-glow mt-6">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <FileText className="h-4 w-4" />
-            Your Resume
+            <Target className="h-4 w-4" /> Target Role &amp; AI Resume Score
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <ResumeUploader token={token} user={user} setUser={setUser} />
-          <p className="text-xs text-muted-foreground mt-3">
-            Your resume powers every AI feature — match scoring, cover letters, and interview prep.
-          </p>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-3 items-end">
+            <div className="flex-1 min-w-[220px]">
+              <label className="text-xs text-muted-foreground">Target role</label>
+              <Select value={ROLES.includes(targetRole) ? targetRole : '__custom__'} onValueChange={(v) => {
+                if (v !== '__custom__') setTargetRole(v)
+              }}>
+                <SelectTrigger className="mt-1.5 h-10"><SelectValue placeholder="Pick a role" /></SelectTrigger>
+                <SelectContent>
+                  {ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                  <SelectItem value="__custom__">✏️ Custom (type below)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 min-w-[220px]">
+              <label className="text-xs text-muted-foreground">Or type any role</label>
+              <Input value={targetRole} onChange={e => setTargetRole(e.target.value)} className="mt-1.5 h-10"
+                placeholder="e.g. Cybersecurity Engineer, Head of Data" />
+            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button onClick={() => runAnalysis()} disabled={analyzing} className="h-10">
+                  {analyzing ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Analyzing...</> : <><Wand2 className="mr-2 h-4 w-4" /> Analyze resume</>}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Score your resume for this specific role using AI</TooltipContent>
+            </Tooltip>
+          </div>
+
+          <ResumeUploader token={token} user={user} setUser={setUser} compact />
+
+          {!analysis && !analyzing && (
+            <div className="rounded-lg border border-dashed border-border p-6 text-center">
+              <Wand2 className="h-6 w-6 mx-auto text-muted-foreground/60" />
+              <p className="text-sm text-muted-foreground mt-2">
+                Upload a resume, pick your target role, and click <b>Analyze resume</b> for a tailored AI score with strengths, gaps and rewrite tips.
+              </p>
+            </div>
+          )}
+
+          {analysis && (
+            <div className="rounded-xl border border-border p-5 bg-foreground/[0.02]">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="relative h-20 w-20 shrink-0">
+                  <svg viewBox="0 0 100 100" className="h-20 w-20 -rotate-90">
+                    <circle cx="50" cy="50" r="42" strokeWidth="8" className="stroke-foreground/10 fill-none" />
+                    <circle cx="50" cy="50" r="42" strokeWidth="8" strokeLinecap="round"
+                      className={`fill-none transition-all ${aiScore >= 75 ? 'stroke-green-500' : aiScore >= 55 ? 'stroke-amber-500' : 'stroke-red-500'}`}
+                      strokeDasharray={`${((aiScore||0)/100)*264} 264`} />
+                  </svg>
+                  <div className="absolute inset-0 flex items-center justify-center text-xl font-semibold">{aiScore ?? '—'}</div>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Fit for {user.target_role || targetRole}</p>
+                  <p className={`text-lg font-semibold ${verdictColor(analysis.verdict)}`}>{analysis.verdict || 'Analysis'}</p>
+                  <p className="text-sm text-muted-foreground mt-1">{analysis.recommendation}</p>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2 mt-4">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">✅ Matched skills</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(analysis.matched_skills || []).map(s => (
+                      <Badge key={s} className="bg-green-500/10 text-green-500 border-green-500/30 font-normal">{s}</Badge>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">⚠️ Missing skills</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(analysis.missing_skills || []).map(s => (
+                      <Badge key={s} className="bg-amber-500/10 text-amber-500 border-amber-500/30 font-normal">{s}</Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {(analysis.improvements || []).length > 0 && (
+                <div className="mt-4">
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">✍️ Suggested rewrites</p>
+                  <ul className="space-y-1.5 text-sm">
+                    {analysis.improvements.map((it, i) => (
+                      <li key={i} className="flex gap-2"><ArrowRight className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" /><span>{it}</span></li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -512,20 +637,76 @@ function Dashboard({ token, user, setUser, onNav }) {
 }
 
 // ---------- Jobs ----------
-function Jobs({ token, user, onOpenMatch, onRefreshApps }) {
+function Jobs({ token, user, onOpenMatch, onRefreshApps, country, setCountry }) {
   const [jobs, setJobs] = useState([])
   const [q, setQ] = useState('')
   const [remote, setRemote] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(1)
+  const [hasMore, setHasMore] = useState(false)
+  const [total, setTotal] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const [meta, setMeta] = useState({})
+  const sentinelRef = useRef(null)
 
-  const load = () => {
-    setLoading(true)
+  const load = async (nextPage = 1, replace = false) => {
+    if (nextPage === 1) setLoading(true)
     const params = new URLSearchParams()
     if (q) params.set('q', q)
     if (remote) params.set('remote', 'true')
-    api(`/jobs?${params}`, { token }).then(d => setJobs(d.jobs)).finally(() => setLoading(false))
+    if (country) params.set('country', country)
+    params.set('page', String(nextPage))
+    params.set('limit', '24')
+    try {
+      const d = await api(`/jobs?${params}`, { token })
+      setJobs(prev => replace || nextPage === 1 ? d.jobs : [...prev, ...d.jobs])
+      setHasMore(d.hasMore)
+      setTotal(d.total)
+      setMeta({ currency: d.currency, lastRefreshed: d.lastRefreshed })
+      setPage(nextPage)
+    } finally { setLoading(false) }
   }
-  useEffect(load, [q, remote])
+
+  // reset when filters change
+  useEffect(() => { load(1, true) /* eslint-disable-next-line */ }, [q, remote, country])
+
+  // infinite scroll observer
+  useEffect(() => {
+    if (!sentinelRef.current) return
+    const io = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && hasMore && !loading) load(page + 1)
+    }, { rootMargin: '400px' })
+    io.observe(sentinelRef.current)
+    return () => io.disconnect()
+  }, [sentinelRef.current, hasMore, loading, page, q, remote, country])
+
+  const doRefresh = async () => {
+    setRefreshing(true)
+    try {
+      const d = await api('/jobs/refresh', { token, method: 'POST' })
+      toast.success(`Fetched ${d.refreshed} fresh jobs from Remotive, RemoteOK, Arbeitnow & Jobicy`)
+      load(1, true)
+    } catch (e) { toast.error(e.message) }
+    finally { setRefreshing(false) }
+  }
+
+  const applyNow = async (job) => {
+    try {
+      const d = await api('/applications', {
+        token, method: 'POST',
+        body: { jobId: job.id, stage: 'applied' }
+      })
+      if (d.apply_url || job.apply_url) window.open(d.apply_url || job.apply_url, '_blank', 'noopener,noreferrer')
+      toast.success('Marked Applied — opening the recruiter\u2019s page in a new tab')
+      onRefreshApps?.()
+    } catch (e) {
+      // if duplicate but we have a URL, still open it
+      if (job.apply_url) {
+        window.open(job.apply_url, '_blank', 'noopener,noreferrer')
+        toast.info('Already in tracker — opened the recruiter page')
+      } else toast.error(e.message)
+    }
+  }
 
   const addToTracker = async (job) => {
     try {
@@ -535,12 +716,47 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps }) {
     } catch (e) { toast.error(e.message) }
   }
 
+  const COUNTRIES = [
+    { code: '', label: '🌐 Global' },
+    { code: 'IN', label: '🇮🇳 India' },
+    { code: 'US', label: '🇺🇸 United States' },
+    { code: 'GB', label: '🇬🇧 United Kingdom' },
+    { code: 'CA', label: '🇨🇦 Canada' },
+    { code: 'DE', label: '🇩🇪 Germany' },
+    { code: 'AU', label: '🇦🇺 Australia' },
+    { code: 'SG', label: '🇸🇬 Singapore' },
+    { code: 'AE', label: '🇦🇪 UAE' },
+  ]
+
   return (
     <div className="container mx-auto px-6 py-8 max-w-7xl">
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Discover Jobs</h1>
-          <p className="text-muted-foreground mt-1">AI-ranked opportunities matched to your profile.</p>
+          <p className="text-muted-foreground mt-1">
+            {total.toLocaleString()} live jobs from Remotive, RemoteOK, Arbeitnow, Jobicy &amp; more.
+            {meta.lastRefreshed && <> · updated {new Date(meta.lastRefreshed).toLocaleTimeString()}</>}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Select value={country} onValueChange={(v) => setCountry(v === 'GLOBAL' ? '' : v)}>
+            <SelectTrigger className="w-44 h-10">
+              <SelectValue placeholder="🌐 Global" />
+            </SelectTrigger>
+            <SelectContent>
+              {COUNTRIES.map(c => (
+                <SelectItem key={c.code || 'GLOBAL'} value={c.code || 'GLOBAL'}>{c.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" onClick={doRefresh} disabled={refreshing}>
+                {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Sparkles className="mr-2 h-4 w-4" /> Sync fresh jobs</>}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Pull the latest jobs from all sources</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -554,54 +770,83 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps }) {
         </Button>
       </div>
 
-      {loading ? (
+      {loading && page === 1 ? (
         <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {jobs.map(job => (
-            <motion.div key={job.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-              <Card className="card-glow border-white/5 hover:border-primary/30 transition group">
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="h-11 w-11 rounded-lg bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center text-sm font-semibold text-primary">
-                        {job.company_logo}
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {jobs.map(job => (
+              <motion.div key={job.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+                <Card className="card-glow hover:border-foreground/30 transition group h-full flex flex-col">
+                  <CardContent className="p-5 flex flex-col flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-11 w-11 rounded-lg bg-foreground/5 flex items-center justify-center text-sm font-semibold shrink-0">
+                          {job.company_logo}
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-medium leading-tight truncate">{job.title}</h3>
+                          <p className="text-sm text-muted-foreground flex items-center gap-1 mt-0.5 truncate">
+                            <Building2 className="h-3 w-3 shrink-0" /> {job.company}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h3 className="font-medium leading-tight">{job.title}</h3>
-                        <p className="text-sm text-muted-foreground flex items-center gap-1 mt-0.5">
-                          <Building2 className="h-3 w-3" /> {job.company}
-                        </p>
-                      </div>
+                      {job.remote && <Badge variant="outline" className="border-green-500/30 text-green-500">Remote</Badge>}
                     </div>
-                    {job.remote && <Badge variant="outline" className="border-green-500/30 text-green-400">Remote</Badge>}
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {job.location}</span>
-                    {job.salary && <span className="flex items-center gap-1"><DollarSign className="h-3 w-3" /> {job.salary}</span>}
-                    <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {job.posted}</span>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {(job.skills || []).slice(0, 4).map(s => (
-                      <Badge key={s} variant="secondary" className="text-xs font-normal">{s}</Badge>
-                    ))}
-                    {(job.skills || []).length > 4 && (
-                      <Badge variant="secondary" className="text-xs font-normal">+{job.skills.length - 4}</Badge>
-                    )}
-                  </div>
-                  <div className="mt-4 flex gap-2">
-                    <Button size="sm" className="flex-1" onClick={() => onOpenMatch(job)}>
-                      <Sparkles className="mr-1.5 h-3.5 w-3.5" /> AI Match
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => addToTracker(job)}>
-                      <Plus className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
+                    <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1 truncate max-w-[180px]"><MapPin className="h-3 w-3 shrink-0" /> {job.location}</span>
+                      {(job.salary_display || job.salary) && <span className="flex items-center gap-1"><DollarSign className="h-3 w-3" /> {job.salary_display || job.salary}</span>}
+                      <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {job.posted}</span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {(job.skills || []).slice(0, 4).map(s => (
+                        <Badge key={s} variant="secondary" className="text-xs font-normal">{s}</Badge>
+                      ))}
+                      {(job.skills || []).length > 4 && (
+                        <Badge variant="secondary" className="text-xs font-normal">+{job.skills.length - 4}</Badge>
+                      )}
+                    </div>
+                    <div className="mt-auto pt-4 flex gap-2">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button size="sm" className="flex-1" onClick={() => onOpenMatch(job)}>
+                            <Sparkles className="mr-1.5 h-3.5 w-3.5" /> AI Match
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>See how well you match this job</TooltipContent>
+                      </Tooltip>
+                      {job.apply_url && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button size="sm" variant="default" onClick={() => applyNow(job)}>
+                              <ArrowRight className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Apply now &amp; move to Applied</TooltipContent>
+                        </Tooltip>
+                      )}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button size="sm" variant="outline" onClick={() => addToTracker(job)}>
+                            <Plus className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Save to tracker as Interested</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            ))}
+          </div>
+          <div ref={sentinelRef} className="h-16 flex items-center justify-center">
+            {hasMore ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : jobs.length > 0 ? (
+              <p className="text-xs text-muted-foreground">You&apos;ve reached the end · {total} jobs total</p>
+            ) : null}
+          </div>
+        </>
       )}
     </div>
   )
@@ -1263,14 +1508,24 @@ function App() {
   const [matchJob, setMatchJob] = useState(null)
   const [appsKey, setAppsKey] = useState(0)
   const [models, setModels] = useState([])
-  const [defaultModel, setDefaultModel] = useState('gemini-2.5-pro')
+  const [defaultModel, setDefaultModel] = useState('gemini-flash-latest')
+  const [country, setCountry] = useState('')
 
   useEffect(() => {
     const t = localStorage.getItem('jobos_token')
     const u = localStorage.getItem('jobos_user')
     if (t && u) { setToken(t); setUser(JSON.parse(u)) }
     api('/models').then(d => { setModels(d.models || []); if (d.default) setDefaultModel(d.default) }).catch(() => {})
+    // Auto-detect country (from headers / user pref / localStorage)
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('jobos_country') : null
+    if (saved) setCountry(saved)
+    else api('/geo').then(d => { if (d.country) setCountry(d.country) }).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (country) localStorage.setItem('jobos_country', country)
+    else localStorage.removeItem('jobos_country')
+  }, [country])
 
   const logout = () => {
     localStorage.removeItem('jobos_token'); localStorage.removeItem('jobos_user')
@@ -1292,8 +1547,8 @@ function App() {
       <NavBar user={user} onLogout={logout} onNav={setNav} current={nav} />
       <AnimatePresence mode="wait">
         <motion.div key={nav} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
-          {nav === 'dashboard' && <Dashboard token={token} user={user} setUser={setUser} onNav={setNav} />}
-          {nav === 'jobs' && <Jobs token={token} user={user} onOpenMatch={setMatchJob} onRefreshApps={() => setAppsKey(k => k + 1)} />}
+          {nav === 'dashboard' && <Dashboard token={token} user={user} setUser={setUser} onNav={setNav} models={models} defaultModel={defaultModel} />}
+          {nav === 'jobs' && <Jobs token={token} user={user} country={country} setCountry={setCountry} onOpenMatch={setMatchJob} onRefreshApps={() => setAppsKey(k => k + 1)} />}
           {nav === 'tracker' && <Tracker token={token} refreshKey={appsKey} />}
           {nav === 'interview' && <Interview token={token} user={user} models={models} defaultModel={defaultModel} />}
           {nav === 'profile' && <Profile token={token} user={user} setUser={setUser} models={models} defaultModel={defaultModel} />}

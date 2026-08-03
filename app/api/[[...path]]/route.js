@@ -5,8 +5,31 @@ import { getDb } from '@/lib/mongodb'
 import { hashPassword, verifyPassword, signToken, getUserFromRequest } from '@/lib/auth'
 import { llmJson, llmText, MODELS, DEFAULT_MODEL_ID } from '@/lib/llm'
 import { SEED_JOBS } from '@/lib/seed'
+import { maybeRefreshJobs, refreshJobsCache, USD_TO_INR, currencyForCountry } from '@/lib/jobFetcher'
 
 const googleClient = new OAuth2Client()
+
+function detectCountry(request) {
+  return (
+    request.headers.get('cf-ipcountry') ||
+    request.headers.get('x-vercel-ip-country') ||
+    request.headers.get('x-country') ||
+    ''
+  ).toUpperCase() || null
+}
+
+function formatSalary(job, targetCountry) {
+  if (!targetCountry || targetCountry === 'US') return job.salary || ''
+  const currency = currencyForCountry(targetCountry)
+  if (currency === 'INR' && (job.salary_min_usd || job.salary_max_usd)) {
+    const min = Math.round((job.salary_min_usd || 0) * USD_TO_INR / 100000)
+    const max = Math.round((job.salary_max_usd || 0) * USD_TO_INR / 100000)
+    if (job.salary_currency === 'INR') return job.salary
+    if (min && max) return `\u20b9${min}L - \u20b9${max}L`
+    if (min) return `\u20b9${min}L+`
+  }
+  return job.salary || ''
+}
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,6 +72,12 @@ async function handle(request, { params }) {
 
     // ---- Health ----
     if (route === '/' && method === 'GET') return ok({ message: 'JobOS AI API' })
+
+    // ---- Geo detect ----
+    if (route === '/geo' && method === 'GET') {
+      const country = detectCountry(request) || 'US'
+      return ok({ country, currency: currencyForCountry(country) })
+    }
 
     // ---- Models ----
     if (route === '/models' && method === 'GET') {
@@ -153,7 +182,7 @@ async function handle(request, { params }) {
     if (route === '/profile' && method === 'PATCH') {
       const r = await requireUser(request, db); if (r.error) return r.error
       const body = await request.json()
-      const allowed = ['name', 'title', 'location', 'skills', 'resume_text', 'preferred_model']
+      const allowed = ['name', 'title', 'location', 'skills', 'resume_text', 'preferred_model', 'target_role', 'country', 'currency']
       const update = {}
       for (const k of allowed) if (body[k] !== undefined) update[k] = body[k]
       update.updatedAt = new Date()
@@ -208,15 +237,55 @@ async function handle(request, { params }) {
       const url = new URL(request.url)
       const q = (url.searchParams.get('q') || '').toLowerCase()
       const remote = url.searchParams.get('remote')
-      const docs = await db.collection('jobs').find({}).sort({ createdAt: -1 }).limit(200).toArray()
-      let jobs = docs.map(({ _id, ...j }) => j)
-      if (q) jobs = jobs.filter(j =>
-        (j.title || '').toLowerCase().includes(q) ||
-        (j.company || '').toLowerCase().includes(q) ||
-        (j.skills || []).some(s => s.toLowerCase().includes(q))
-      )
-      if (remote === 'true') jobs = jobs.filter(j => j.remote)
-      return ok({ jobs })
+      const country = (url.searchParams.get('country') || detectCountry(request) || '').toUpperCase()
+      const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10))
+      const limit = Math.min(60, Math.max(6, parseInt(url.searchParams.get('limit') || '24', 10)))
+      const refresh = url.searchParams.get('refresh') === 'true'
+
+      if (refresh) await refreshJobsCache(db)
+      else maybeRefreshJobs(db).catch(() => {}) // fire and forget
+
+      const filter = {}
+      if (remote === 'true') filter.remote = true
+      if (q) {
+        filter.$or = [
+          { title: { $regex: q, $options: 'i' } },
+          { company: { $regex: q, $options: 'i' } },
+          { skills: { $elemMatch: { $regex: q, $options: 'i' } } },
+          { category: { $regex: q, $options: 'i' } },
+        ]
+      }
+      if (country) {
+        // Include jobs matching this country, remote jobs, or country-agnostic
+        filter.$and = [
+          filter.$and || {},
+          { $or: [{ country }, { country: null }, { remote: true }] },
+        ].filter(x => Object.keys(x).length)
+      }
+
+      const total = await db.collection('jobs').countDocuments(filter)
+      const docs = await db.collection('jobs')
+        .find(filter).sort({ createdAt: -1 })
+        .skip((page - 1) * limit).limit(limit).toArray()
+
+      const jobs = docs.map(({ _id, ...j }) => ({
+        ...j,
+        salary_display: formatSalary(j, country),
+      }))
+      const meta = await db.collection('meta').findOne({ key: 'jobs_last_refresh' })
+      return ok({
+        jobs,
+        page, limit, total,
+        hasMore: page * limit < total,
+        country,
+        currency: currencyForCountry(country),
+        lastRefreshed: meta?.at || null,
+      })
+    }
+
+    if (route === '/jobs/refresh' && method === 'POST') {
+      const count = await refreshJobsCache(db)
+      return ok({ refreshed: count })
     }
 
     if (route === '/jobs' && method === 'POST') {
@@ -249,6 +318,52 @@ async function handle(request, { params }) {
       if (!job) return err('Not found', 404)
       const { _id, ...safe } = job
       return ok({ job: safe })
+    }
+
+    // ---- AI Resume Score for target role ----
+    if (route === '/ai/resume-score' && method === 'POST') {
+      const r = await requireUser(request, db); if (r.error) return r.error
+      const body = await request.json()
+      const targetRole = body.target_role || r.user.target_role || r.user.title || 'Software Engineer'
+      const modelId = body.modelId || r.user.preferred_model || DEFAULT_MODEL_ID
+      const resume = (r.user.resume_text || '').slice(0, 6000)
+      if (!resume) return err('No resume on file. Upload your resume first.', 400)
+
+      const prompt = `Act as a senior recruiter and career coach.
+Analyze this candidate's resume for the target role: "${targetRole}"
+
+RESUME:
+${resume}
+
+CANDIDATE STATED SKILLS: ${(r.user.skills || []).join(', ') || 'not provided'}
+
+Return STRICT JSON only:
+{
+  "score": <int 0-100 overall fit for this target role>,
+  "verdict": "<one of: Excellent | Strong | Solid | Needs Work | Weak>",
+  "matched_skills": [<string, skills the resume already demonstrates for this role>],
+  "missing_skills": [<string, skills required for the role but missing>],
+  "strengths": [<string, 3-4 items specific to this target role>],
+  "gaps": [<string, 3-4 items specific to this target role>],
+  "keyword_hits": <int, count of role-relevant keywords found>,
+  "ats_notes": "<one-line ATS friendliness note>",
+  "recommendation": "<one-line concrete next action>",
+  "improvements": [<string, 3-5 concrete resume edits to boost score>]
+}`
+      const analysis = await llmJson({ modelId, prompt })
+      const analysisRecord = {
+        target_role: targetRole,
+        modelId,
+        analysis,
+        at: new Date(),
+      }
+      await db.collection('users').updateOne(
+        { id: r.user.id },
+        { $set: { target_role: targetRole, last_resume_analysis: analysisRecord } }
+      )
+      const updated = await db.collection('users').findOne({ id: r.user.id })
+      const { password_hash, _id, ...safe } = updated
+      return ok({ analysis, user: safe })
     }
 
     // ---- AI Match ----
@@ -326,9 +441,20 @@ Return plain text cover letter only, no preamble.`
       const body = await request.json()
       const job = await db.collection('jobs').findOne({ id: body.jobId })
       if (!job) return err('Job not found', 404)
-      // avoid duplicates
+      // avoid duplicates: if exists, optionally advance stage
       const dup = await db.collection('applications').findOne({ userId: r.user.id, jobId: body.jobId })
-      if (dup) return err('Already added to tracker', 409)
+      if (dup) {
+        if (body.stage && body.stage !== dup.stage) {
+          await db.collection('applications').updateOne(
+            { id: dup.id },
+            { $set: { stage: body.stage, updatedAt: new Date() }, $push: { history: { stage: body.stage, at: new Date() } } }
+          )
+          const upd = await db.collection('applications').findOne({ id: dup.id })
+          const { _id: __, ...safe } = upd
+          return ok({ application: safe, apply_url: job.apply_url || null, updated: true })
+        }
+        return err('Already added to tracker', 409)
+      }
       const app = {
         id: uuidv4(),
         userId: r.user.id,
@@ -338,6 +464,7 @@ Return plain text cover letter only, no preamble.`
         company_logo: job.company_logo,
         location: job.location,
         salary: job.salary,
+        apply_url: job.apply_url || null,
         stage: body.stage || 'interested',
         match_percent: body.match_percent || null,
         notes: body.notes || '',
@@ -346,7 +473,7 @@ Return plain text cover letter only, no preamble.`
       }
       await db.collection('applications').insertOne(app)
       const { _id, ...safe } = app
-      return ok({ application: safe })
+      return ok({ application: safe, apply_url: job.apply_url || null })
     }
 
     if (route.startsWith('/applications/') && method === 'PATCH') {
