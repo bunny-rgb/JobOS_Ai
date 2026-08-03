@@ -9,17 +9,26 @@
 #====================================================================================================
 
 user_problem_statement: |
-  Phase 4 - Job platform upgrade:
-  1) Apply Now button - actually applies (opens recruiter URL) and moves to Applied stage.
-  2) AI-driven Resume Score tied to user's chosen target role (SDE, PM, etc.) - not a heuristic.
-     User can change target role on the Dashboard front page.
-  3) Real job aggregation from multiple free public APIs (Remotive, RemoteOK, Arbeitnow, Jobicy) with
-     pagination + infinite scroll. Total ~300+ jobs available at any time.
-  4) Country auto-detect via Cf-IPCountry / X-Vercel-IP-Country headers, salary shown in INR when country=IN,
-     manual country switcher in the Jobs page.
+  Bug fixes for Phase 4:
+  A) Country filter did not work - showed US jobs when user set India.
+  B) Jobs weren't filtered by resume/preference relevance.
+  C) React warning "Encountered two children with the same key ext_xxx" while infinite-scrolling.
+
+  Fixes applied:
+  1) lib/jobFetcher.js now uses source-prefixed IDs (remotive-*, remoteok-*, arbeitnow-*, jobicy-*) so keys never collide.
+  2) inferCountry(location) added with word-boundary regexes for 30+ countries; each external job is tagged with
+     an ISO 2-letter country code on ingest.
+  3) /api/jobs country filter is now STRICT: only {country: X} OR {remote:true, worldwide:true}.
+     Previously it also matched {country: null} which basically included everything.
+  4) /api/jobs is now RELEVANCE-AWARE for authenticated users: reads user.skills + user.target_role + user.resume_text,
+     computes a _relevance score per job (skill overlap x4, target-role token match x6, resume mention x2),
+     sorts by that, and filters to _relevance > 0 when the user has any context. Client can opt out with ?smart=false.
+  5) ensureSeed now upserts seed jobs on every boot so schema updates (country, apply_url) propagate to existing rows.
+  6) Frontend Jobs list uses composite key `${source}-${id}-${idx}` (belt-and-suspenders).
+  7) Frontend gets a "Match my resume" toggle in the filter bar (default ON) tied to ?smart param.
 
 backend:
-  - task: "Job aggregation from external APIs with pagination"
+  - task: "Country filter (strict) + inferred country from location string"
     implemented: true
     working: "NA"
     file: "app/api/[[...path]]/route.js, lib/jobFetcher.js"
@@ -30,16 +39,13 @@ backend:
       - working: "NA"
         agent: "main"
         comment: |
-          - New /lib/jobFetcher.js pulls from Remotive, RemoteOK, Arbeitnow, Jobicy (public, no key needed).
-          - POST /api/jobs/refresh triggers a hard refresh (bulk upsert to Mongo). Verified curl returns {refreshed: 331}.
-          - GET /api/jobs?page=1&limit=24&q=...&remote=true&country=IN&refresh=false returns
-            {jobs, page, limit, total, hasMore, country, currency, lastRefreshed}.
-          - Country filter respects seed 'country' field OR remote:true OR null country.
-          - Currency conversion helper: USD → INR when country=IN via USD_TO_INR (=83.5).
-          - Salary field added: salary_display alongside original salary.
-          - maybeRefreshJobs runs on GET /api/jobs when cache is stale (>1h) — fire and forget.
+          Country filter now: {$or: [{country: <cc>}, {remote:true, worldwide:true}]}
+          External jobs now have `country` (ISO 2 letters) computed from location string, and `worldwide:true` when
+          location says Anywhere/Worldwide/Global. Word-boundaries in the regex avoid the "Indiana" → IN false positive.
+          Verified via curl: /api/jobs?country=IN returns 13 jobs (seeds + remotive worldwide + remoteok Noida job).
+          US Indiana no longer tagged as IN.
 
-  - task: "AI Resume Score for target role"
+  - task: "Relevance-aware /api/jobs (smart mode)"
     implemented: true
     working: "NA"
     file: "app/api/[[...path]]/route.js"
@@ -50,29 +56,12 @@ backend:
       - working: "NA"
         agent: "main"
         comment: |
-          POST /api/ai/resume-score {target_role, modelId}
-          Requires resume_text on user. Returns
-          {analysis:{score:0-100, verdict, matched_skills[], missing_skills[], strengths[],
-                     gaps[], keyword_hits, ats_notes, recommendation, improvements[]}, user}.
-          Persists to user.last_resume_analysis {target_role, modelId, analysis, at}.
-          Also updates user.target_role to the analyzed role.
+          When ?smart!=false and Bearer token present, jobs are scored:
+            _relevance = 4*skill_overlap + 6*(target_role token in title/category) + 2*resume_text mentions
+          Sorted by _relevance desc, then createdAt desc. If any relevance signals exist, filter to _relevance > 0
+          (with fallback to full list to keep page 1 filled). Returns `smart: true` in response.
 
-  - task: "Apply Now endpoint (Applications POST returns apply_url + accepts stage upgrade for duplicates)"
-    implemented: true
-    working: "NA"
-    file: "app/api/[[...path]]/route.js"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: true
-    status_history:
-      - working: "NA"
-        agent: "main"
-        comment: |
-          POST /api/applications now returns {application, apply_url} — client opens URL in a new tab.
-          If a duplicate exists AND a new stage is provided, the existing app is upgraded to that stage
-          (e.g. Interested → Applied). If no stage change requested, 409 duplicate.
-
-  - task: "Geo detect endpoint /api/geo"
+  - task: "ensureSeed idempotent upsert"
     implemented: true
     working: "NA"
     file: "app/api/[[...path]]/route.js"
@@ -82,24 +71,10 @@ backend:
     status_history:
       - working: "NA"
         agent: "main"
-        comment: |
-          GET /api/geo reads Cf-IPCountry / X-Vercel-IP-Country / X-Country headers and returns
-          {country, currency}. Defaults country="US" if no header present.
-
-  - task: "Profile PATCH accepts target_role/country/currency"
-    implemented: true
-    working: "NA"
-    file: "app/api/[[...path]]/route.js"
-    stuck_count: 0
-    priority: "medium"
-    needs_retesting: true
-    status_history:
-      - working: "NA"
-        agent: "main"
-        comment: "Extended allowed[] to include target_role, country, currency."
+        comment: "bulkWrite upserts by (title,company) each boot to backfill new fields like country/apply_url."
 
 frontend:
-  - task: "Jobs page: infinite scroll, country switcher, Apply Now button, salary display"
+  - task: "Unique React keys + Match my resume toggle"
     implemented: true
     working: "NA"
     file: "app/page.js"
@@ -109,33 +84,19 @@ frontend:
     status_history:
       - working: "NA"
         agent: "main"
-        comment: "IntersectionObserver on sentinel; ~24 jobs/page; hasMore controls further fetches. Country Select in header; 'Sync fresh jobs' button; per-card Apply Now button opens apply_url and moves app to Applied stage."
-
-  - task: "Dashboard: target role picker + AI Resume Score card"
-    implemented: true
-    working: "NA"
-    file: "app/page.js"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
-      - working: "NA"
-        agent: "main"
-        comment: "New Dashboard section: pick target role from 20+ options or type custom → 'Analyze resume' → shows score ring, verdict, matched/missing skills, and improvement bullets."
+        comment: "key=`${source}-${id}-${idx}`; smart toggle wired to ?smart param and included in useEffect deps."
 
 metadata:
   created_by: "main_agent"
-  version: "4.0"
-  test_sequence: 3
+  version: "4.1"
+  test_sequence: 4
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Job aggregation from external APIs with pagination"
-    - "AI Resume Score for target role"
-    - "Apply Now endpoint (Applications POST returns apply_url + accepts stage upgrade for duplicates)"
-    - "Geo detect endpoint /api/geo"
-    - "Profile PATCH accepts target_role/country/currency"
+    - "Country filter (strict) + inferred country from location string"
+    - "Relevance-aware /api/jobs (smart mode)"
+    - "ensureSeed idempotent upsert"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -143,20 +104,22 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Phase 4 backend built. Please test:
+      Please test the /api/jobs country + relevance behavior:
 
-      1) POST /api/jobs/refresh -> {refreshed: > 100}
-      2) GET /api/jobs -> {jobs: array (len==limit or fewer), total > 200, hasMore: boolean, currency, country, lastRefreshed:string}
-      3) GET /api/jobs?page=2 -> different subset
-      4) GET /api/jobs?q=engineer&remote=true -> filtered
-      5) GET /api/jobs?country=IN -> jobs where country==IN OR remote or country==null
-      6) GET /api/geo -> {country:"US" default, currency:"USD"}
-      7) POST /api/ai/resume-score with target_role="Product Manager" and modelId="gemini-flash-latest" AFTER uploading a resume via /api/profile/resume-upload — expect {analysis:{score, verdict, matched_skills, missing_skills, strengths, gaps, keyword_hits, ats_notes, recommendation, improvements}, user}
-      8) POST /api/ai/resume-score without a resume_text on user -> 400
-      9) POST /api/applications {jobId, stage:'interested'} -> {application, apply_url:string|null}
-      10) POST /api/applications {jobId (same), stage:'applied'} -> should upgrade stage, returns {application, apply_url, updated:true}
-      11) POST /api/applications {jobId (same), stage:'interested'} again with same stage -> 409
-      12) PATCH /api/profile {target_role:"Data Scientist", country:"IN"} -> user reflects both
-      13) Sanity: /api/dashboard/stats, /api/models, /api/interview/rounds, /api/auth/me all still 200.
+      1) POST /api/jobs/refresh (assert > 100 refreshed).
+      2) GET /api/jobs?country=IN&limit=20&smart=false (no auth)
+         - assert 200 and every returned job has country == "IN" OR (remote:true AND worldwide:true).
+         - assert seed jobs Infosys/Zoho/Razorpay/TCS are present with country == "IN".
+         - assert NO US-only jobs (e.g., "New York" or "California" locations) leak through.
+      3) GET /api/jobs?country=US&limit=20&smart=false — assert every job country == "US" or remote+worldwide.
+      4) GET /api/jobs?country=IN&smart=false&limit=20 vs GET /api/jobs?country=US&smart=false&limit=20 — different job sets.
+      5) Register a new user, PATCH /api/profile with skills:["Playwright","TypeScript","SQL"], target_role:"QA Engineer".
+      6) GET /api/jobs?smart=true (default) WITH Bearer token — assert response includes `smart:true`, and the FIRST job
+         has jobs.skills containing at least one of the user's skills, OR the title/category contains "qa" or "engineer".
+         The Stripe/Zoho QA seeds should rank high.
+      7) GET /api/jobs?smart=false with Bearer token — assert `smart:false` and pure recency order (createdAt desc).
+      8) Combined: GET /api/jobs?country=IN&smart=true with Bearer token whose skills are ["SQL","Airflow","Python"]
+         and target_role="Data Engineer" — assert Razorpay Data Engineer seed appears near the top.
+      9) Ensure NO duplicate ids in /api/jobs response over 3 pages (page=1,2,3).
 
-      Use unique test email each run. LLM calls up to 60s.
+      Sanity: /api/dashboard/stats, /api/models, /api/geo still 200.

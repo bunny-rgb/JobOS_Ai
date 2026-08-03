@@ -46,12 +46,16 @@ function err(message, status = 400) { return cors(NextResponse.json({ error: mes
 export async function OPTIONS() { return cors(new NextResponse(null, { status: 200 })) }
 
 async function ensureSeed(db) {
-  const count = await db.collection('jobs').countDocuments()
-  if (count === 0) {
-    const now = new Date()
-    const docs = SEED_JOBS.map(j => ({ id: uuidv4(), ...j, createdAt: now, seed: true }))
-    await db.collection('jobs').insertMany(docs)
-  }
+  // Always upsert seed jobs so schema changes (country/apply_url) propagate on next boot.
+  // Cheap because bulk is small (~10).
+  const bulk = SEED_JOBS.map(j => ({
+    updateOne: {
+      filter: { seed: true, title: j.title, company: j.company },
+      update: { $set: { ...j, seed: true, source: 'seed' }, $setOnInsert: { id: uuidv4(), createdAt: new Date() } },
+      upsert: true,
+    },
+  }))
+  try { await db.collection('jobs').bulkWrite(bulk, { ordered: false }) } catch {}
 }
 
 async function requireUser(request, db) {
@@ -237,49 +241,87 @@ async function handle(request, { params }) {
       const url = new URL(request.url)
       const q = (url.searchParams.get('q') || '').toLowerCase()
       const remote = url.searchParams.get('remote')
-      const country = (url.searchParams.get('country') || detectCountry(request) || '').toUpperCase()
+      const country = (url.searchParams.get('country') || '').toUpperCase()
+      const smart = url.searchParams.get('smart') !== 'false'
       const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10))
       const limit = Math.min(60, Math.max(6, parseInt(url.searchParams.get('limit') || '24', 10)))
       const refresh = url.searchParams.get('refresh') === 'true'
 
       if (refresh) await refreshJobsCache(db)
-      else maybeRefreshJobs(db).catch(() => {}) // fire and forget
+      else maybeRefreshJobs(db).catch(() => {})
 
-      const filter = {}
-      if (remote === 'true') filter.remote = true
+      // Optional user context for relevance scoring
+      const claims = getUserFromRequest(request)
+      const user = claims?.uid ? await db.collection('users').findOne({ id: claims.uid }) : null
+
+      // ---- Build Mongo filter ----
+      const and = []
+      if (remote === 'true') and.push({ remote: true })
       if (q) {
-        filter.$or = [
-          { title: { $regex: q, $options: 'i' } },
-          { company: { $regex: q, $options: 'i' } },
-          { skills: { $elemMatch: { $regex: q, $options: 'i' } } },
-          { category: { $regex: q, $options: 'i' } },
-        ]
+        and.push({
+          $or: [
+            { title: { $regex: q, $options: 'i' } },
+            { company: { $regex: q, $options: 'i' } },
+            { skills: { $elemMatch: { $regex: q, $options: 'i' } } },
+            { category: { $regex: q, $options: 'i' } },
+          ],
+        })
       }
       if (country) {
-        // Include jobs matching this country, remote jobs, or country-agnostic
-        filter.$and = [
-          filter.$and || {},
-          { $or: [{ country }, { country: null }, { remote: true }] },
-        ].filter(x => Object.keys(x).length)
+        // Strict: only jobs explicitly in this country OR remote+worldwide
+        and.push({ $or: [{ country }, { remote: true, worldwide: true }] })
+      }
+      const filter = and.length ? { $and: and } : {}
+
+      // Pull a larger candidate pool for relevance sorting, then paginate
+      const candidateLimit = smart && user?.skills?.length ? 500 : limit * 5
+      const rawDocs = await db.collection('jobs')
+        .find(filter).sort({ createdAt: -1 }).limit(Math.max(candidateLimit, limit * (page + 1))).toArray()
+
+      // Compute relevance if we have a user
+      let scored = rawDocs.map(({ _id, ...j }) => ({ ...j }))
+      if (smart && user) {
+        const userSkills = new Set((user.skills || []).map(s => String(s).toLowerCase()))
+        const target = String(user.target_role || user.title || '').toLowerCase().split(/\s+/).filter(w => w.length > 2)
+        const resumeLower = String(user.resume_text || '').toLowerCase()
+        scored = scored.map(j => {
+          const jSkillsLower = (j.skills || []).map(s => String(s).toLowerCase())
+          const skillOverlap = jSkillsLower.filter(s => userSkills.has(s)).length
+          const titleWords = String(j.title || '').toLowerCase()
+          const catWords = String(j.category || '').toLowerCase()
+          const roleMatch = target.some(w => titleWords.includes(w) || catWords.includes(w)) ? 1 : 0
+          const resumeMatch = jSkillsLower.filter(s => s.length > 2 && resumeLower.includes(s)).length
+          const score = skillOverlap * 4 + roleMatch * 6 + resumeMatch * 2
+          return { ...j, _relevance: score }
+        })
+        // Sort by relevance desc then createdAt desc
+        scored.sort((a, b) => (b._relevance || 0) - (a._relevance || 0) || new Date(b.createdAt) - new Date(a.createdAt))
+        // If user has skills/target, only keep jobs with any relevance signal (unless too few)
+        const hasContext = userSkills.size > 0 || target.length > 0
+        if (hasContext) {
+          const relevant = scored.filter(j => j._relevance > 0)
+          if (relevant.length >= limit) scored = relevant
+          // else fall back to all — sorted — so page 1 still fills
+        }
       }
 
-      const total = await db.collection('jobs').countDocuments(filter)
-      const docs = await db.collection('jobs')
-        .find(filter).sort({ createdAt: -1 })
-        .skip((page - 1) * limit).limit(limit).toArray()
-
-      const jobs = docs.map(({ _id, ...j }) => ({
+      const total = scored.length
+      const start = (page - 1) * limit
+      const pageDocs = scored.slice(start, start + limit)
+      const jobs = pageDocs.map(j => ({
         ...j,
         salary_display: formatSalary(j, country),
       }))
+
       const meta = await db.collection('meta').findOne({ key: 'jobs_last_refresh' })
       return ok({
         jobs,
         page, limit, total,
-        hasMore: page * limit < total,
+        hasMore: start + limit < total,
         country,
         currency: currencyForCountry(country),
         lastRefreshed: meta?.at || null,
+        smart: !!(smart && user),
       })
     }
 

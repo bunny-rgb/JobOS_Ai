@@ -641,6 +641,7 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps, country, setCountry }) 
   const [jobs, setJobs] = useState([])
   const [q, setQ] = useState('')
   const [remote, setRemote] = useState(false)
+  const [smart, setSmart] = useState(true)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
@@ -655,6 +656,7 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps, country, setCountry }) 
     if (q) params.set('q', q)
     if (remote) params.set('remote', 'true')
     if (country) params.set('country', country)
+    if (!smart) params.set('smart', 'false')
     params.set('page', String(nextPage))
     params.set('limit', '24')
     try {
@@ -662,15 +664,14 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps, country, setCountry }) 
       setJobs(prev => replace || nextPage === 1 ? d.jobs : [...prev, ...d.jobs])
       setHasMore(d.hasMore)
       setTotal(d.total)
-      setMeta({ currency: d.currency, lastRefreshed: d.lastRefreshed })
+      setMeta({ currency: d.currency, lastRefreshed: d.lastRefreshed, smart: d.smart })
       setPage(nextPage)
     } finally { setLoading(false) }
   }
 
   // reset when filters change
-  useEffect(() => { load(1, true) /* eslint-disable-next-line */ }, [q, remote, country])
+  useEffect(() => { load(1, true) /* eslint-disable-next-line */ }, [q, remote, country, smart])
 
-  // infinite scroll observer
   useEffect(() => {
     if (!sentinelRef.current) return
     const io = new IntersectionObserver((entries) => {
@@ -678,7 +679,7 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps, country, setCountry }) 
     }, { rootMargin: '400px' })
     io.observe(sentinelRef.current)
     return () => io.disconnect()
-  }, [sentinelRef.current, hasMore, loading, page, q, remote, country])
+  }, [sentinelRef.current, hasMore, loading, page, q, remote, country, smart])
 
   const doRefresh = async () => {
     setRefreshing(true)
@@ -765,6 +766,14 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps, country, setCountry }) 
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search title, company or skill..." value={q} onChange={e => setQ(e.target.value)} className="pl-10 h-11" />
         </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant={smart ? 'default' : 'outline'} onClick={() => setSmart(v => !v)} className="h-11">
+              <Target className="mr-2 h-4 w-4" /> Match my resume
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{smart ? 'Ranking jobs by your skills &amp; target role — click to disable' : 'Turn on to rank jobs against your resume + target role'}</TooltipContent>
+        </Tooltip>
         <Button variant={remote ? 'default' : 'outline'} onClick={() => setRemote(v => !v)} className="h-11">
           <MapPin className="mr-2 h-4 w-4" /> Remote only
         </Button>
@@ -775,8 +784,8 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps, country, setCountry }) 
       ) : (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {jobs.map(job => (
-              <motion.div key={job.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+            {jobs.map((job, idx) => (
+              <motion.div key={`${job.source || 'src'}-${job.id}-${idx}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
                 <Card className="card-glow hover:border-foreground/30 transition group h-full flex flex-col">
                   <CardContent className="p-5 flex flex-col flex-1">
                     <div className="flex items-start justify-between gap-3">
