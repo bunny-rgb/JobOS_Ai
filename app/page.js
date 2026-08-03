@@ -394,19 +394,20 @@ function Jobs({ token, user, onOpenMatch, onRefreshApps }) {
 }
 
 // ---------- AI Match Dialog ----------
-function MatchDialog({ open, job, token, user, onClose, onAddedToTracker }) {
-  const [provider, setProvider] = useState(user?.preferred_model || 'openai')
+function MatchDialog({ open, job, token, user, onClose, onAddedToTracker, models, defaultModel }) {
+  const [modelId, setModelId] = useState(user?.preferred_model || defaultModel || 'gemini-2.5-pro')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [coverLetter, setCoverLetter] = useState('')
   const [clLoading, setClLoading] = useState(false)
 
   useEffect(() => { if (open) { setResult(null); setCoverLetter('') } }, [open, job])
+  useEffect(() => { if (defaultModel && !user?.preferred_model) setModelId(defaultModel) }, [defaultModel, user])
 
   const runMatch = async () => {
     setLoading(true); setResult(null)
     try {
-      const d = await api('/ai/match', { token, method: 'POST', body: { jobId: job.id, provider } })
+      const d = await api('/ai/match', { token, method: 'POST', body: { jobId: job.id, modelId } })
       setResult(d.match)
     } catch (e) { toast.error(e.message) }
     finally { setLoading(false) }
@@ -414,7 +415,7 @@ function MatchDialog({ open, job, token, user, onClose, onAddedToTracker }) {
   const genCover = async () => {
     setClLoading(true)
     try {
-      const d = await api('/ai/cover-letter', { token, method: 'POST', body: { jobId: job.id, provider } })
+      const d = await api('/ai/cover-letter', { token, method: 'POST', body: { jobId: job.id, modelId } })
       setCoverLetter(d.cover_letter)
     } catch (e) { toast.error(e.message) }
     finally { setClLoading(false) }
@@ -435,6 +436,7 @@ function MatchDialog({ open, job, token, user, onClose, onAddedToTracker }) {
   const pct = result?.match_percent ?? 0
   const color = pct >= 75 ? 'text-green-400' : pct >= 55 ? 'text-amber-400' : 'text-red-400'
   const ring = pct >= 75 ? 'stroke-green-400' : pct >= 55 ? 'stroke-amber-400' : 'stroke-red-400'
+  const activeModel = models.find(m => m.id === modelId)
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -451,14 +453,15 @@ function MatchDialog({ open, job, token, user, onClose, onAddedToTracker }) {
           </div>
         </DialogHeader>
 
-        <div className="flex items-center gap-3 border border-white/10 rounded-lg p-3">
+        <div className="flex items-center gap-3 border border-white/10 rounded-lg p-3 flex-wrap">
           <Sparkles className="h-4 w-4 text-primary" />
           <span className="text-sm">AI Model:</span>
-          <Select value={provider} onValueChange={setProvider}>
-            <SelectTrigger className="w-44 h-9"><SelectValue /></SelectTrigger>
+          <Select value={modelId} onValueChange={setModelId}>
+            <SelectTrigger className="w-64 h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="openai">GPT-5 (OpenAI)</SelectItem>
-              <SelectItem value="anthropic">Claude Sonnet 4.5</SelectItem>
+              {models.map(m => (
+                <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
           <div className="flex-1" />
@@ -480,7 +483,7 @@ function MatchDialog({ open, job, token, user, onClose, onAddedToTracker }) {
         {loading && (
           <div className="text-center py-10">
             <Loader2 className="h-6 w-6 animate-spin mx-auto text-primary" />
-            <p className="mt-3 text-sm text-muted-foreground">Analyzing with {provider === 'openai' ? 'GPT-5' : 'Claude Sonnet 4.5'}...</p>
+            <p className="mt-3 text-sm text-muted-foreground">Analyzing with {activeModel?.label || modelId}...</p>
           </div>
         )}
 
@@ -681,7 +684,7 @@ function Tracker({ token, refreshKey }) {
 }
 
 // ---------- Profile ----------
-function Profile({ token, user, setUser }) {
+function Profile({ token, user, setUser, models = [], defaultModel = 'gemini-2.5-pro' }) {
   const [name, setName] = useState(user.name || '')
   const [title, setTitle] = useState(user.title || '')
   const [location, setLocation] = useState(user.location || '')
@@ -737,14 +740,15 @@ function Profile({ token, user, setUser }) {
             </div>
             <div>
               <label className="text-sm text-muted-foreground">Preferred AI Model</label>
-              <Select value={user.preferred_model || 'openai'} onValueChange={async (v) => {
+              <Select value={user.preferred_model || defaultModel} onValueChange={async (v) => {
                 const d = await api('/profile', { token, method: 'PATCH', body: { preferred_model: v } })
                 setUser(d.user); localStorage.setItem('jobos_user', JSON.stringify(d.user))
               }}>
                 <SelectTrigger className="mt-1.5 h-11"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="openai">GPT-5 (OpenAI)</SelectItem>
-                  <SelectItem value="anthropic">Claude Sonnet 4.5</SelectItem>
+                  {models.map(m => (
+                    <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -789,11 +793,14 @@ function App() {
   const [nav, setNav] = useState('dashboard')
   const [matchJob, setMatchJob] = useState(null)
   const [appsKey, setAppsKey] = useState(0)
+  const [models, setModels] = useState([])
+  const [defaultModel, setDefaultModel] = useState('gemini-2.5-pro')
 
   useEffect(() => {
     const t = localStorage.getItem('jobos_token')
     const u = localStorage.getItem('jobos_user')
     if (t && u) { setToken(t); setUser(JSON.parse(u)) }
+    api('/models').then(d => { setModels(d.models || []); if (d.default) setDefaultModel(d.default) }).catch(() => {})
   }, [])
 
   const logout = () => {
@@ -819,11 +826,12 @@ function App() {
           {nav === 'dashboard' && <Dashboard token={token} user={user} onNav={setNav} />}
           {nav === 'jobs' && <Jobs token={token} user={user} onOpenMatch={setMatchJob} onRefreshApps={() => setAppsKey(k => k + 1)} />}
           {nav === 'tracker' && <Tracker token={token} refreshKey={appsKey} />}
-          {nav === 'profile' && <Profile token={token} user={user} setUser={setUser} />}
+          {nav === 'profile' && <Profile token={token} user={user} setUser={setUser} models={models} defaultModel={defaultModel} />}
         </motion.div>
       </AnimatePresence>
       <MatchDialog
         open={!!matchJob} job={matchJob} token={token} user={user}
+        models={models} defaultModel={defaultModel}
         onClose={() => setMatchJob(null)}
         onAddedToTracker={() => setAppsKey(k => k + 1)}
       />

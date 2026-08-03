@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { getDb } from '@/lib/mongodb'
 import { hashPassword, verifyPassword, signToken, getUserFromRequest } from '@/lib/auth'
-import { llmJson, llmText } from '@/lib/llm'
+import { llmJson, llmText, MODELS, DEFAULT_MODEL_ID } from '@/lib/llm'
 import { SEED_JOBS } from '@/lib/seed'
 
 export const runtime = 'nodejs'
@@ -46,6 +46,11 @@ async function handle(request, { params }) {
 
     // ---- Health ----
     if (route === '/' && method === 'GET') return ok({ message: 'JobOS AI API' })
+
+    // ---- Models ----
+    if (route === '/models' && method === 'GET') {
+      return ok({ models: MODELS.map(({ id, label, provider }) => ({ id, label, provider })), default: DEFAULT_MODEL_ID })
+    }
 
     // ---- Auth ----
     if (route === '/auth/register' && method === 'POST') {
@@ -153,7 +158,7 @@ async function handle(request, { params }) {
     if (route === '/ai/match' && method === 'POST') {
       const r = await requireUser(request, db); if (r.error) return r.error
       const body = await request.json()
-      const { jobId, provider } = body
+      const { jobId, modelId } = body
       const job = await db.collection('jobs').findOne({ id: jobId })
       if (!job) return err('Job not found', 404)
       const userSkills = (r.user.skills || []).join(', ') || 'not provided'
@@ -179,13 +184,12 @@ Return JSON with this exact shape:
   "verdict": "<one of: Strong Match | Good Match | Fair Match | Weak Match>"
 }`
       const result = await llmJson({
-        provider: provider || r.user.preferred_model || 'openai',
+        modelId: modelId || r.user.preferred_model || DEFAULT_MODEL_ID,
         prompt,
-        sessionId: `match-${r.user.id}-${jobId}`,
       })
       // persist
       await db.collection('ai_matches').insertOne({
-        id: uuidv4(), userId: r.user.id, jobId, result, createdAt: new Date(),
+        id: uuidv4(), userId: r.user.id, jobId, modelId: modelId || DEFAULT_MODEL_ID, result, createdAt: new Date(),
       })
       return ok({ match: result, job: (({ _id, ...j }) => j)(job) })
     }
@@ -193,7 +197,7 @@ Return JSON with this exact shape:
     // ---- AI Cover Letter ----
     if (route === '/ai/cover-letter' && method === 'POST') {
       const r = await requireUser(request, db); if (r.error) return r.error
-      const { jobId, provider } = await request.json()
+      const { jobId, modelId } = await request.json()
       const job = await db.collection('jobs').findOne({ id: jobId })
       if (!job) return err('Job not found', 404)
       const prompt = `Write a concise, compelling cover letter (max 220 words) for:
@@ -207,9 +211,8 @@ Candidate Resume/Bio: ${(r.user.resume_text || '').slice(0, 3000)}
 
 Return plain text cover letter only, no preamble.`
       const text = await llmText({
-        provider: provider || r.user.preferred_model || 'openai',
+        modelId: modelId || r.user.preferred_model || DEFAULT_MODEL_ID,
         prompt,
-        sessionId: `cl-${r.user.id}-${jobId}`,
       })
       return ok({ cover_letter: text })
     }
