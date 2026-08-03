@@ -58,7 +58,7 @@ function Landing({ onGetStarted }) {
         >
           <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/5 px-4 py-1.5 text-sm">
             <Sparkles className="h-3.5 w-3.5 text-primary" />
-            <span className="text-primary/90">Powered by GPT-5 &amp; Claude Sonnet 4.5</span>
+            <span className="text-primary/90">Powered by Gemini 2.5 &amp; Claude Sonnet 4.5</span>
           </div>
           <h1 className="mt-8 text-5xl md:text-7xl font-semibold tracking-tight">
             Your AI Career <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent">Copilot</span>
