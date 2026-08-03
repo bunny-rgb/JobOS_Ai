@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useTheme } from 'next-themes'
 import { toast } from 'sonner'
@@ -119,6 +119,7 @@ function NavBar({ user, onGetStarted, onLogout, onNav, current }) {
                 { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
                 { key: 'jobs', label: 'Jobs', icon: Briefcase },
                 { key: 'tracker', label: 'Tracker', icon: Kanban },
+                { key: 'interview', label: 'Interview', icon: GraduationCap },
                 { key: 'profile', label: 'Profile', icon: User },
               ].map(item => (
                 <button
@@ -165,6 +166,49 @@ function AuthDialog({ open, onOpenChange, onAuth }) {
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(false)
+  const btnRef = useRef(null)
+  const [gsiReady, setGsiReady] = useState(false)
+
+  const handleGoogleCredential = async (response) => {
+    try {
+      const data = await api('/auth/google', {
+        method: 'POST', body: { credential: response.credential }
+      })
+      localStorage.setItem('jobos_token', data.token)
+      localStorage.setItem('jobos_user', JSON.stringify(data.user))
+      onAuth(data.token, data.user)
+      toast.success('Signed in with Google')
+    } catch (e) { toast.error(e.message) }
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+    if (!clientId) return
+    const init = () => {
+      if (!window.google?.accounts?.id || !btnRef.current) return
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleCredential,
+        ux_mode: 'popup',
+      })
+      btnRef.current.innerHTML = ''
+      window.google.accounts.id.renderButton(btnRef.current, {
+        type: 'standard', theme: 'filled_black', size: 'large',
+        text: mode === 'login' ? 'signin_with' : 'signup_with',
+        shape: 'rectangular', width: 360,
+      })
+      setGsiReady(true)
+    }
+    if (window.google?.accounts?.id) init()
+    else {
+      const s = document.createElement('script')
+      s.src = 'https://accounts.google.com/gsi/client'
+      s.async = true; s.defer = true
+      s.onload = init
+      document.head.appendChild(s)
+    }
+  }, [open, mode])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -189,7 +233,17 @@ function AuthDialog({ open, onOpenChange, onAuth }) {
           <DialogTitle className="text-2xl">{mode === 'login' ? 'Welcome back' : 'Create your account'}</DialogTitle>
           <DialogDescription>Your AI career copilot is one click away.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
+
+        <div className="flex justify-center min-h-[44px]">
+          <div ref={btnRef} data-testid="google-signin-btn" />
+        </div>
+
+        <div className="relative py-1">
+          <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/10" /></div>
+          <div className="relative flex justify-center"><span className="bg-background px-2 text-xs text-muted-foreground">or with email</span></div>
+        </div>
+
+        <form onSubmit={submit} className="space-y-3">
           {mode === 'register' && (
             <Input placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} className="h-11" />
           )}
@@ -785,6 +839,258 @@ function Profile({ token, user, setUser, models = [], defaultModel = 'gemini-2.5
   )
 }
 
+// ---------- Interview Coach ----------
+function Interview({ token, user, models, defaultModel }) {
+  const [rounds, setRounds] = useState([])
+  const [round, setRound] = useState(null)
+  const [modelId, setModelId] = useState(user?.preferred_model || defaultModel || 'gemini-flash-latest')
+  const [session, setSession] = useState(null)
+  const [current, setCurrent] = useState(null)
+  const [answer, setAnswer] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [history, setHistory] = useState([])
+  const [report, setReport] = useState(null)
+  const [progress, setProgress] = useState({ answered: 0, total: 5 })
+  const [total, setTotal] = useState(5)
+  const [voiceOn, setVoiceOn] = useState(false)
+  const recognitionRef = useRef(null)
+  const [listening, setListening] = useState(false)
+
+  useEffect(() => {
+    api('/interview/rounds').then(d => setRounds(d.rounds || [])).catch(() => {})
+  }, [])
+
+  const speak = (text) => {
+    if (!voiceOn || typeof window === 'undefined' || !window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    const u = new SpeechSynthesisUtterance(text)
+    u.rate = 1; u.pitch = 1
+    window.speechSynthesis.speak(u)
+  }
+
+  const startMic = () => {
+    const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null
+    if (!SR) { toast.error('Voice input not supported in this browser'); return }
+    const rec = new SR()
+    rec.continuous = false; rec.interimResults = false; rec.lang = 'en-US'
+    rec.onresult = (e) => {
+      const t = Array.from(e.results).map(r => r[0].transcript).join(' ')
+      setAnswer(prev => prev ? `${prev} ${t}` : t)
+    }
+    rec.onend = () => setListening(false)
+    rec.onerror = () => setListening(false)
+    rec.start()
+    recognitionRef.current = rec
+    setListening(true)
+  }
+  const stopMic = () => { recognitionRef.current?.stop(); setListening(false) }
+
+  const start = async (r) => {
+    setStarting(true); setRound(r); setReport(null); setHistory([])
+    try {
+      const d = await api('/interview/start', { token, method: 'POST', body: { round: r.id, modelId, total } })
+      setSession(d.session); setCurrent(d.currentQuestion)
+      setProgress({ answered: 0, total: d.session.total })
+      speak(d.currentQuestion?.question || '')
+    } catch (e) { toast.error(e.message); setRound(null) }
+    finally { setStarting(false) }
+  }
+
+  const submit = async () => {
+    if (!answer.trim()) return
+    setLoading(true)
+    try {
+      const d = await api('/interview/answer', {
+        token, method: 'POST', body: { sessionId: session.id, answer }
+      })
+      setHistory(prev => [...prev, { ...d.evaluation }])
+      setProgress(d.progress || progress)
+      setAnswer('')
+      if (d.done) {
+        setReport(d.report); setCurrent(null); setSession(prev => ({ ...prev, status: 'completed' }))
+        speak(`Interview complete. Overall score ${d.report?.overall_score ?? ''}. Verdict: ${d.report?.verdict ?? ''}.`)
+      } else {
+        setCurrent(d.nextQuestion)
+        speak(d.nextQuestion?.question || '')
+      }
+    } catch (e) { toast.error(e.message) }
+    finally { setLoading(false) }
+  }
+
+  const reset = () => { setRound(null); setSession(null); setCurrent(null); setReport(null); setHistory([]); setAnswer('') }
+
+  // Round selection screen
+  if (!round) {
+    return (
+      <div className="container mx-auto px-6 py-8 max-w-6xl">
+        <div className="flex items-end justify-between flex-wrap gap-4 mb-6">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">AI Interview Coach</h1>
+            <p className="text-muted-foreground mt-1">Pick a round and practice with real-time AI feedback and scoring.</p>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Model:</span>
+              <Select value={modelId} onValueChange={setModelId}>
+                <SelectTrigger className="w-56 h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {models.map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Questions:</span>
+              <Select value={String(total)} onValueChange={(v) => setTotal(Number(v))}>
+                <SelectTrigger className="w-20 h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[3, 5, 7, 10].map(n => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {rounds.map(r => (
+            <Card key={r.id} className="card-glow border-white/5 hover:border-primary/40 transition group cursor-pointer" onClick={() => start(r)}>
+              <CardContent className="p-6">
+                <div className="flex items-start justify-between">
+                  <div className="h-10 w-10 rounded-lg bg-primary/15 flex items-center justify-center">
+                    <GraduationCap className="h-5 w-5 text-primary" />
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition" />
+                </div>
+                <h3 className="mt-4 font-medium">{r.label}</h3>
+                <p className="text-sm text-muted-foreground mt-1.5">{r.desc}</p>
+                <Button size="sm" className="mt-4" disabled={starting}>
+                  {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <>Start round <ArrowRight className="ml-1.5 h-3.5 w-3.5" /></>}
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  // Active session or report
+  return (
+    <div className="container mx-auto px-6 py-8 max-w-4xl">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-2">
+        <div>
+          <button onClick={reset} className="text-xs text-muted-foreground hover:text-foreground">← Back to rounds</button>
+          <h1 className="text-2xl font-semibold tracking-tight mt-1">{round.label}</h1>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button size="sm" variant={voiceOn ? 'default' : 'outline'} onClick={() => setVoiceOn(v => !v)}>
+            {voiceOn ? '🔊 Voice On' : '🔇 Voice Off'}
+          </Button>
+          <div className="text-sm text-muted-foreground">
+            {progress.answered}/{progress.total}
+          </div>
+        </div>
+      </div>
+      <div className="h-1.5 rounded-full bg-white/5 overflow-hidden mb-6">
+        <div className="h-full bg-primary transition-all" style={{ width: `${(progress.answered / progress.total) * 100}%` }} />
+      </div>
+
+      {history.map((h, i) => (
+        <Card key={i} className="card-glow border-white/5 mb-3">
+          <CardContent className="p-5">
+            <p className="text-xs text-muted-foreground">Q{i + 1}</p>
+            <p className="font-medium mt-1">{h.question}</p>
+            <div className="mt-3 rounded-md bg-white/[0.03] p-3">
+              <p className="text-xs text-muted-foreground mb-1">Your answer</p>
+              <p className="text-sm">{h.answer}</p>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <Badge className={`${h.score >= 7 ? 'bg-green-500/15 text-green-400 border-green-500/30' : h.score >= 4 ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30'}`}>Score {h.score}/10</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground mt-3">{h.feedback}</p>
+          </CardContent>
+        </Card>
+      ))}
+
+      {current && !report && (
+        <Card className="card-glow border-primary/30 mb-4">
+          <CardContent className="p-5">
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-primary/20 flex items-center justify-center text-primary">
+                <GraduationCap className="h-4 w-4" />
+              </div>
+              <span className="text-xs uppercase tracking-wider text-muted-foreground">Question {progress.answered + 1}</span>
+            </div>
+            <p className="mt-3 text-lg font-medium">{current.question}</p>
+            {current.hint && <p className="text-xs text-muted-foreground mt-2">💡 {current.hint}</p>}
+
+            <Textarea value={answer} onChange={e => setAnswer(e.target.value)}
+              placeholder="Type your answer here..." className="mt-4 min-h-[140px]" />
+            <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex gap-2">
+                {!listening ? (
+                  <Button size="sm" variant="outline" onClick={startMic} type="button">🎤 Speak</Button>
+                ) : (
+                  <Button size="sm" variant="destructive" onClick={stopMic} type="button">⏹ Stop</Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={() => setAnswer('')}>Clear</Button>
+              </div>
+              <Button onClick={submit} disabled={loading || !answer.trim()}>
+                {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Evaluating...</> : <>Submit answer <ArrowRight className="ml-1.5 h-4 w-4" /></>}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {report && (
+        <Card className="card-glow border-primary/40 mt-4">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-3">
+              <Trophy className="h-6 w-6 text-primary" />
+              <h2 className="text-xl font-semibold">Interview Report</h2>
+            </div>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-white/10 p-5 text-center">
+                <p className="text-xs text-muted-foreground uppercase">Overall Score</p>
+                <p className="text-5xl font-semibold mt-2 bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent">{report.overall_score ?? '—'}</p>
+                <p className="text-sm text-muted-foreground mt-1">out of 100</p>
+              </div>
+              <div className="rounded-xl border border-white/10 p-5">
+                <p className="text-xs text-muted-foreground uppercase">Verdict</p>
+                <p className="text-2xl font-semibold mt-2">{report.verdict}</p>
+                <p className="text-sm text-muted-foreground mt-3">
+                  {history.length} questions answered in this {round.label} round.
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3 mt-4">
+              {[
+                { title: 'Strengths', items: report.strengths || [], icon: CheckCircle2, color: 'text-green-400' },
+                { title: 'Weak Areas', items: report.weak_areas || [], icon: TrendingUp, color: 'text-amber-400' },
+                { title: 'Recommendations', items: report.recommendations || [], icon: Rocket, color: 'text-primary' },
+              ].map((sec, i) => (
+                <div key={i} className="rounded-lg border border-white/10 p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <sec.icon className={`h-4 w-4 ${sec.color}`} />
+                    <p className="text-sm font-medium">{sec.title}</p>
+                  </div>
+                  <ul className="space-y-1.5 text-sm text-muted-foreground">
+                    {sec.items.map((it, j) => <li key={j} className="flex gap-2">• <span>{it}</span></li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            <div className="mt-6 flex gap-2">
+              <Button onClick={reset}><Sparkles className="mr-2 h-4 w-4" /> Try another round</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
 // ---------- App shell ----------
 function App() {
   const [token, setToken] = useState(null)
@@ -826,6 +1132,7 @@ function App() {
           {nav === 'dashboard' && <Dashboard token={token} user={user} onNav={setNav} />}
           {nav === 'jobs' && <Jobs token={token} user={user} onOpenMatch={setMatchJob} onRefreshApps={() => setAppsKey(k => k + 1)} />}
           {nav === 'tracker' && <Tracker token={token} refreshKey={appsKey} />}
+          {nav === 'interview' && <Interview token={token} user={user} models={models} defaultModel={defaultModel} />}
           {nav === 'profile' && <Profile token={token} user={user} setUser={setUser} models={models} defaultModel={defaultModel} />}
         </motion.div>
       </AnimatePresence>

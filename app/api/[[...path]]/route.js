@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
+import { OAuth2Client } from 'google-auth-library'
 import { getDb } from '@/lib/mongodb'
 import { hashPassword, verifyPassword, signToken, getUserFromRequest } from '@/lib/auth'
 import { llmJson, llmText, MODELS, DEFAULT_MODEL_ID } from '@/lib/llm'
 import { SEED_JOBS } from '@/lib/seed'
+
+const googleClient = new OAuth2Client()
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -80,7 +83,61 @@ async function handle(request, { params }) {
       const { email, password } = await request.json()
       if (!email || !password) return err('email and password required')
       const user = await db.collection('users').findOne({ email: email.toLowerCase() })
-      if (!user || !verifyPassword(password, user.password_hash)) return err('Invalid credentials', 401)
+      if (!user || !user.password_hash || !verifyPassword(password, user.password_hash)) return err('Invalid credentials', 401)
+      const token = signToken({ uid: user.id, email: user.email })
+      const { password_hash, _id, ...safe } = user
+      return ok({ token, user: safe })
+    }
+
+    // ---- Google OAuth ----
+    if (route === '/auth/google' && method === 'POST') {
+      const { credential } = await request.json()
+      if (!credential || typeof credential !== 'string') return err('Missing Google credential', 400)
+      const clientId = process.env.GOOGLE_CLIENT_ID
+      if (!clientId) return err('Server missing GOOGLE_CLIENT_ID', 500)
+      let payload
+      try {
+        const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId })
+        payload = ticket.getPayload()
+      } catch (e) {
+        return err('Invalid Google credential', 401)
+      }
+      if (!payload?.sub || !payload.email) return err('Google account not eligible', 401)
+      const googleSub = payload.sub
+      const email = payload.email.toLowerCase()
+      let user = await db.collection('users').findOne({ google_sub: googleSub })
+      if (!user) user = await db.collection('users').findOne({ email })
+      if (!user) {
+        user = {
+          id: uuidv4(),
+          email,
+          name: payload.name || email.split('@')[0],
+          picture: payload.picture || null,
+          google_sub: googleSub,
+          password_hash: null,
+          auth_providers: ['google'],
+          skills: [],
+          resume_text: '',
+          title: '',
+          location: '',
+          createdAt: new Date(),
+        }
+        await db.collection('users').insertOne(user)
+      } else {
+        await db.collection('users').updateOne(
+          { id: user.id },
+          {
+            $set: {
+              google_sub: googleSub,
+              name: user.name || payload.name || email.split('@')[0],
+              picture: payload.picture || user.picture || null,
+              updatedAt: new Date(),
+            },
+            $addToSet: { auth_providers: 'google' },
+          }
+        )
+        user = await db.collection('users').findOne({ id: user.id })
+      }
       const token = signToken({ uid: user.id, email: user.email })
       const { password_hash, _id, ...safe } = user
       return ok({ token, user: safe })
@@ -304,6 +361,121 @@ Return plain text cover letter only, no preamble.`
       return ok({ stats, resume_score: score })
     }
 
+    // ---- Interview Coach ----
+    if (route === '/interview/rounds' && method === 'GET') {
+      return ok({
+        rounds: [
+          { id: 'qa', label: 'QA / Manual Testing', desc: 'Test cases, bug reports, agile/JIRA, regression, exploratory.' },
+          { id: 'sql', label: 'SQL', desc: 'Joins, aggregations, window functions, indexing, optimization.' },
+          { id: 'hr', label: 'HR', desc: 'Motivation, culture-fit, salary, notice period, background.' },
+          { id: 'behavioral', label: 'Behavioral (STAR)', desc: 'Conflict, ownership, failure, teamwork \u2014 answered in STAR.' },
+          { id: 'system_design', label: 'System Design', desc: 'Scalability, tradeoffs, capacity, API + DB design.' },
+          { id: 'manager', label: 'Manager Round', desc: 'Leadership, prioritization, stakeholder communication.' },
+        ],
+      })
+    }
+
+    if (route === '/interview/start' && method === 'POST') {
+      const r = await requireUser(request, db); if (r.error) return r.error
+      const { round, modelId, total = 5 } = await request.json()
+      const rounds = ['qa', 'sql', 'hr', 'behavioral', 'system_design', 'manager']
+      if (!rounds.includes(round)) return err('Invalid round', 400)
+      const session = {
+        id: uuidv4(),
+        userId: r.user.id,
+        round,
+        modelId: modelId || r.user.preferred_model || DEFAULT_MODEL_ID,
+        total: Math.min(Math.max(3, total), 10),
+        turns: [], // { question, answer, feedback, score }
+        status: 'active',
+        createdAt: new Date(),
+      }
+      // Generate first question
+      const prompt = `You are a senior interviewer running a ${round.toUpperCase()} round for candidate "${r.user.name || 'the candidate'}" (title: ${r.user.title || 'not specified'}, skills: ${(r.user.skills || []).join(', ') || 'unknown'}).
+Ask ONE clear, medium-difficulty interview question for this round. Return STRICT JSON:
+{"question":"<one question, no preamble>","hint":"<one-line hint, optional>","category":"<sub-topic>"}`
+      const q = await llmJson({ modelId: session.modelId, prompt })
+      session.turns.push({ question: q.question || q._raw || 'Tell me about your experience.', hint: q.hint || '', category: q.category || round })
+      await db.collection('interview_sessions').insertOne(session)
+      const { _id, ...safe } = session
+      return ok({ session: safe, currentQuestion: session.turns[0] })
+    }
+
+    if (route === '/interview/answer' && method === 'POST') {
+      const r = await requireUser(request, db); if (r.error) return r.error
+      const { sessionId, answer } = await request.json()
+      const session = await db.collection('interview_sessions').findOne({ id: sessionId, userId: r.user.id })
+      if (!session) return err('Session not found', 404)
+      if (session.status !== 'active') return err('Session already completed', 400)
+      const idx = session.turns.length - 1
+      if (!session.turns[idx] || session.turns[idx].answer) return err('No pending question', 400)
+
+      // Evaluate answer
+      const evalPrompt = `Evaluate this interview answer. Round: ${session.round.toUpperCase()}.
+Question: ${session.turns[idx].question}
+Candidate Answer: ${answer}
+
+Return STRICT JSON:
+{"score": <int 0-10>, "feedback": "<2-3 sentence constructive feedback>", "ideal_points": [<string, 2-3 bullets of what a great answer covers>]}`
+      const evaluation = await llmJson({ modelId: session.modelId, prompt: evalPrompt })
+
+      session.turns[idx].answer = answer
+      session.turns[idx].feedback = evaluation.feedback || evaluation._raw || ''
+      session.turns[idx].score = typeof evaluation.score === 'number' ? evaluation.score : 5
+      session.turns[idx].ideal_points = evaluation.ideal_points || []
+
+      const answeredCount = session.turns.length
+      let nextQuestion = null
+      let report = null
+
+      if (answeredCount < session.total) {
+        const asked = session.turns.map(t => t.question).join(' | ')
+        const nextPrompt = `Continue the ${session.round.toUpperCase()} interview. Previously asked: ${asked}
+Ask ONE new medium-difficulty question, avoiding overlap. Return STRICT JSON:
+{"question":"<one question>","hint":"<optional>","category":"<sub-topic>"}`
+        const q = await llmJson({ modelId: session.modelId, prompt: nextPrompt })
+        nextQuestion = { question: q.question || q._raw || 'Describe a challenging bug you fixed.', hint: q.hint || '', category: q.category || session.round }
+        session.turns.push(nextQuestion)
+      } else {
+        // Final report
+        const transcript = session.turns.map((t, i) => `Q${i+1} (${t.category || ''}): ${t.question}\nA${i+1}: ${t.answer}\nScore: ${t.score}/10\nFeedback: ${t.feedback}`).join('\n\n')
+        const reportPrompt = `Provide a final evaluation report for this ${session.round.toUpperCase()} mock interview.
+Transcript:
+${transcript}
+
+Return STRICT JSON:
+{
+  "overall_score": <int 0-100>,
+  "verdict": "<Excellent | Strong | Solid | Needs Work | Weak>",
+  "strengths": [<string, 3-4 items>],
+  "weak_areas": [<string, 3-4 items>],
+  "recommendations": [<string, 3-4 concrete action items>]
+}`
+        report = await llmJson({ modelId: session.modelId, prompt: reportPrompt })
+        session.status = 'completed'
+        session.report = report
+        session.completedAt = new Date()
+      }
+
+      await db.collection('interview_sessions').updateOne(
+        { id: sessionId },
+        { $set: { turns: session.turns, status: session.status, report: session.report || null, completedAt: session.completedAt || null } }
+      )
+      const { _id, ...safe } = session
+      return ok({ session: safe, evaluation: session.turns[idx], nextQuestion, report, done: session.status === 'completed', progress: { answered: answeredCount, total: session.total } })
+    }
+
+    if (route === '/interview/sessions' && method === 'GET') {
+      const r = await requireUser(request, db); if (r.error) return r.error
+      const items = await db.collection('interview_sessions')
+        .find({ userId: r.user.id })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .toArray()
+      return ok({ sessions: items.map(({ _id, ...s }) => s) })
+    }
+
+    // Route not found
     return err(`Route ${route} not found`, 404)
   } catch (e) {
     console.error('API Error:', e)
