@@ -13,7 +13,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" suppressHydrationWarning className={inter.variable}>
       <head />
-      <body className="font-sans antialiased">
+      <body className="font-sans antialiased" suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>

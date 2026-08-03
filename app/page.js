@@ -105,7 +105,10 @@ function Landing({ onGetStarted }) {
 }
 
 function NavBar({ user, onGetStarted, onLogout, onNav, current }) {
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme, resolvedTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+  const activeTheme = mounted ? (resolvedTheme || theme) : 'dark'
   const goHome = () => onNav && onNav('dashboard')
   return (
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur-xl">
@@ -159,11 +162,13 @@ function NavBar({ user, onGetStarted, onLogout, onNav, current }) {
         <div className="flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-                {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              <Button variant="ghost" size="icon" onClick={() => setTheme(activeTheme === 'dark' ? 'light' : 'dark')} aria-label="Toggle theme">
+                <span suppressHydrationWarning>
+                  {mounted ? (activeTheme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />) : <Sun className="h-4 w-4 opacity-0" />}
+                </span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}</TooltipContent>
+            <TooltipContent>{mounted && activeTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}</TooltipContent>
           </Tooltip>
           {user ? (
             <>

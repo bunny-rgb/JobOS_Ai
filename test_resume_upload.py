@@ -136,38 +136,21 @@ Built comprehensive test automation frameworks and pipelines"""
         return False
 
 # ============================================================================
-# 3. PDF UPLOAD (using reportlab)
+# 3. PDF UPLOAD (using pre-generated test PDF)
 # ============================================================================
 def test_pdf_upload():
-    print_test("3. PDF Upload - Generate with reportlab")
+    print_test("3. PDF Upload - Using pre-generated /tmp/test_resume.pdf")
     try:
-        # Install reportlab if needed
-        print_info("Installing reportlab...")
-        os.system("pip install reportlab --break-system-packages -q")
-        
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
-        
-        # Create PDF
+        # Use pre-generated PDF
         pdf_path = "/tmp/test_resume.pdf"
-        c = canvas.Canvas(pdf_path, pagesize=letter)
         
-        # Add resume content
-        y = 750
-        lines = [
-            "John Doe",
-            "Senior QA Automation Engineer",
-            "5+ years Playwright, TypeScript, Selenium",
-            "Skills: Playwright, TypeScript, SQL, API Testing",
-            "Built CI/CD test pipelines"
-        ]
+        # Check if file exists
+        if not os.path.exists(pdf_path):
+            print_error(f"Pre-generated PDF not found at {pdf_path}")
+            return False
         
-        for line in lines:
-            c.drawString(100, y, line)
-            y -= 20
-        
-        c.save()
-        print_info(f"Created PDF file: {pdf_path}")
+        file_size = os.path.getsize(pdf_path)
+        print_info(f"Using PDF file: {pdf_path} ({file_size} bytes)")
         
         # Upload
         headers = {"Authorization": f"Bearer {token}"}
@@ -199,15 +182,15 @@ def test_pdf_upload():
                 print_error("resume_text is empty")
                 return False
             
-            # Check if resume_text contains expected content
+            # Check if resume_text contains expected content (Playwright or QA)
             if "Playwright" not in resume_text and "QA" not in resume_text:
                 print_error(f"resume_text doesn't contain expected content. Got: {resume_text[:200]}")
                 return False
             
-            print_info(f"Chars extracted: {chars}")
-            print_info(f"Filename: {filename}")
-            print_info(f"Resume text preview: {resume_text[:150]}...")
-            print_success("PDF upload successful with correct data")
+            print_info(f"✅ CRITICAL: Chars extracted: {chars}")
+            print_info(f"✅ CRITICAL: Filename: {filename}")
+            print_info(f"✅ CRITICAL: Resume text preview (first 200 chars): {resume_text[:200]}...")
+            print_success("PDF upload successful with correct data - unpdf parser working!")
             return True
         else:
             print_error(f"Expected 200, got {response.status_code}: {response.text}")

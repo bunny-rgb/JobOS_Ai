@@ -176,11 +176,10 @@ async function handle(request, { params }) {
       let text = ''
       try {
         if (ext === 'pdf') {
-          const { PDFParse } = await import('pdf-parse')
-          const parser = new PDFParse({ data: new Uint8Array(buf) })
-          const data = await parser.getText()
-          text = data?.text || ''
-          try { await parser.destroy() } catch {}
+          const { extractText, getDocumentProxy } = await import('unpdf')
+          const doc = await getDocumentProxy(new Uint8Array(buf))
+          const result = await extractText(doc, { mergePages: true })
+          text = typeof result?.text === 'string' ? result.text : (Array.isArray(result?.text) ? result.text.join('\n') : '')
         } else if (ext === 'docx') {
           const mammoth = await import('mammoth')
           const result = await mammoth.extractRawText({ buffer: buf })
