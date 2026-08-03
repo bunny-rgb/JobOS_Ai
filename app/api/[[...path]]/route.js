@@ -176,9 +176,11 @@ async function handle(request, { params }) {
       let text = ''
       try {
         if (ext === 'pdf') {
-          const pdfParse = (await import('pdf-parse')).default
-          const data = await pdfParse(buf)
-          text = data.text || ''
+          const { PDFParse } = await import('pdf-parse')
+          const parser = new PDFParse({ data: new Uint8Array(buf) })
+          const data = await parser.getText()
+          text = data?.text || ''
+          try { await parser.destroy() } catch {}
         } else if (ext === 'docx') {
           const mammoth = await import('mammoth')
           const result = await mammoth.extractRawText({ buffer: buf })
@@ -189,6 +191,7 @@ async function handle(request, { params }) {
           return err(`Unsupported file type .${ext}. Use PDF, DOCX, TXT or MD.`, 400)
         }
       } catch (e) {
+        console.error('Resume parse error:', e)
         return err(`Could not parse ${ext.toUpperCase()} file: ${e.message}`, 400)
       }
       text = text.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 20000)
