@@ -163,6 +163,44 @@ async function handle(request, { params }) {
       return ok({ user: safe })
     }
 
+    if (route === '/profile/resume-upload' && method === 'POST') {
+      const r = await requireUser(request, db); if (r.error) return r.error
+      const form = await request.formData()
+      const file = form.get('file')
+      if (!file || typeof file === 'string') return err('No file uploaded', 400)
+      const name = file.name || 'resume'
+      const size = file.size || 0
+      if (size > 8 * 1024 * 1024) return err('File too large (max 8MB)', 413)
+      const ext = (name.split('.').pop() || '').toLowerCase()
+      const buf = Buffer.from(await file.arrayBuffer())
+      let text = ''
+      try {
+        if (ext === 'pdf') {
+          const pdfParse = (await import('pdf-parse')).default
+          const data = await pdfParse(buf)
+          text = data.text || ''
+        } else if (ext === 'docx') {
+          const mammoth = await import('mammoth')
+          const result = await mammoth.extractRawText({ buffer: buf })
+          text = result.value || ''
+        } else if (['txt', 'md'].includes(ext)) {
+          text = buf.toString('utf8')
+        } else {
+          return err(`Unsupported file type .${ext}. Use PDF, DOCX, TXT or MD.`, 400)
+        }
+      } catch (e) {
+        return err(`Could not parse ${ext.toUpperCase()} file: ${e.message}`, 400)
+      }
+      text = text.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 20000)
+      await db.collection('users').updateOne(
+        { id: r.user.id },
+        { $set: { resume_text: text, resume_filename: name, updatedAt: new Date() } }
+      )
+      const updated = await db.collection('users').findOne({ id: r.user.id })
+      const { password_hash, _id, ...safe } = updated
+      return ok({ user: safe, chars: text.length, filename: name })
+    }
+
     // ---- Jobs ----
     if (route === '/jobs' && method === 'GET') {
       const url = new URL(request.url)

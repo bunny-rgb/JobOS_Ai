@@ -8,7 +8,7 @@ import {
   Sparkles, Briefcase, LayoutDashboard, Kanban, User, LogOut, Search,
   MapPin, DollarSign, Clock, TrendingUp, Target, Zap, ChevronRight,
   Sun, Moon, Loader2, X, Plus, CheckCircle2, Building2, Award,
-  Wand2, ArrowRight, GraduationCap, Rocket, Trophy, FileText
+  Wand2, ArrowRight, GraduationCap, Rocket, Trophy, FileText, Upload, FileUp, Home
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STAGES = [
   { key: 'interested', label: 'Interested', color: 'from-slate-500/20 to-slate-500/5', dot: 'bg-slate-400' },
@@ -47,21 +48,21 @@ function api(path, { token, method = 'GET', body } = {}) {
 // ---------- Landing ----------
 function Landing({ onGetStarted }) {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-background">
-      <div className="absolute inset-0 grid-bg opacity-40" />
-      <div className="absolute inset-0 glow" />
+    <div className="relative min-h-screen overflow-hidden">
+      <div className="absolute inset-0 grid-bg opacity-30" />
+      <div className="absolute inset-0 hero-glow" />
       <NavBar onGetStarted={onGetStarted} />
       <section className="relative container mx-auto px-6 pt-24 pb-32 max-w-6xl">
         <motion.div
           initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}
           className="flex flex-col items-center text-center"
         >
-          <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/5 px-4 py-1.5 text-sm">
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-            <span className="text-primary/90">Powered by Gemini 2.5 &amp; Claude Sonnet 4.5</span>
+          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-foreground/5 px-4 py-1.5 text-sm backdrop-blur">
+            <Sparkles className="h-3.5 w-3.5" />
+            <span className="text-muted-foreground">Powered by Gemini 2.5 &amp; Claude Sonnet 4.5</span>
           </div>
           <h1 className="mt-8 text-5xl md:text-7xl font-semibold tracking-tight">
-            Your AI Career <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent">Copilot</span>
+            Your AI Career <span className="bg-gradient-to-b from-white to-neutral-500 bg-clip-text text-transparent">Copilot</span>
           </h1>
           <p className="mt-6 max-w-2xl text-lg text-muted-foreground">
             JobOS AI runs your entire job search &mdash; discover jobs, match instantly with AI, track applications, and land offers 10x faster.
@@ -82,13 +83,13 @@ function Landing({ onGetStarted }) {
         >
           {[
             { icon: Target, title: 'AI Job Match', desc: 'Every job scored 0-100% against your skills with actionable gaps.' },
-            { icon: Kanban, title: 'Kanban Tracker', desc: 'Interested \u2192 Applied \u2192 Interview \u2192 Offer. All in one board.' },
+            { icon: Kanban, title: 'Kanban Tracker', desc: 'Interested → Applied → Interview → Offer. All in one board.' },
             { icon: Wand2, title: 'AI Cover Letters', desc: 'Tailored letters generated in seconds for every role.' },
           ].map((f, i) => (
-            <Card key={i} className="card-glow border-white/5">
+            <Card key={i} className="card-glow">
               <CardHeader>
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                  <f.icon className="h-5 w-5 text-primary" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground/5">
+                  <f.icon className="h-5 w-5" />
                 </div>
                 <CardTitle className="mt-3 text-lg">{f.title}</CardTitle>
               </CardHeader>
@@ -105,50 +106,79 @@ function Landing({ onGetStarted }) {
 
 function NavBar({ user, onGetStarted, onLogout, onNav, current }) {
   const { theme, setTheme } = useTheme()
+  const goHome = () => onNav && onNav('dashboard')
   return (
-    <header className="sticky top-0 z-40 border-b border-white/5 bg-background/70 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur-xl">
       <div className="container mx-auto flex h-16 items-center justify-between px-6 max-w-7xl">
         <div className="flex items-center gap-8">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-semibold">J</div>
-            <span className="font-semibold tracking-tight">JobOS AI</span>
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={user ? goHome : undefined}
+                className={`flex items-center gap-2 ${user ? 'cursor-pointer' : 'cursor-default'}`}
+              >
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-white to-neutral-400 text-black font-semibold shadow-lg shadow-black/30">
+                  J
+                </div>
+                <span className="font-semibold tracking-tight">JobOS AI</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{user ? 'Go to Dashboard' : 'JobOS AI — home'}</TooltipContent>
+          </Tooltip>
+
           {user && (
             <nav className="hidden md:flex items-center gap-1">
               {[
-                { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-                { key: 'jobs', label: 'Jobs', icon: Briefcase },
-                { key: 'tracker', label: 'Tracker', icon: Kanban },
-                { key: 'interview', label: 'Interview', icon: GraduationCap },
-                { key: 'profile', label: 'Profile', icon: User },
+                { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, tip: 'Your career mission control' },
+                { key: 'jobs', label: 'Jobs', icon: Briefcase, tip: 'Discover matching roles' },
+                { key: 'tracker', label: 'Tracker', icon: Kanban, tip: 'Kanban application tracker' },
+                { key: 'interview', label: 'Interview', icon: GraduationCap, tip: 'AI mock interviews' },
+                { key: 'profile', label: 'Profile', icon: User, tip: 'Skills, resume & preferences' },
               ].map(item => (
-                <button
-                  key={item.key}
-                  onClick={() => onNav(item.key)}
-                  className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition ${
-                    current === item.key ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <item.icon className="h-3.5 w-3.5" />
-                  {item.label}
-                </button>
+                <Tooltip key={item.key}>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => onNav(item.key)}
+                      className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition ${
+                        current === item.key
+                          ? 'bg-foreground/10 text-foreground'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-foreground/5'
+                      }`}
+                    >
+                      <item.icon className="h-3.5 w-3.5" />
+                      {item.label}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{item.tip}</TooltipContent>
+                </Tooltip>
               ))}
             </nav>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+                {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}</TooltipContent>
+          </Tooltip>
           {user ? (
             <>
-              <div className="hidden md:flex items-center gap-2 rounded-full border border-white/10 px-3 py-1 text-sm">
-                <div className="h-6 w-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium text-primary">
+              <div className="hidden md:flex items-center gap-2 rounded-full border border-border px-3 py-1 text-sm">
+                <div className="h-6 w-6 rounded-full bg-foreground/10 flex items-center justify-center text-xs font-medium">
                   {user.name?.[0]?.toUpperCase() || 'U'}
                 </div>
                 <span className="text-muted-foreground">{user.name}</span>
               </div>
-              <Button variant="ghost" size="icon" onClick={onLogout}><LogOut className="h-4 w-4" /></Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" onClick={onLogout}><LogOut className="h-4 w-4" /></Button>
+                </TooltipTrigger>
+                <TooltipContent>Sign out</TooltipContent>
+              </Tooltip>
             </>
           ) : (
             <Button onClick={onGetStarted}>Get Started</Button>
@@ -156,6 +186,102 @@ function NavBar({ user, onGetStarted, onLogout, onNav, current }) {
         </div>
       </div>
     </header>
+  )
+}
+
+// ---------- Reusable Resume Upload ----------
+function ResumeUploader({ token, user, setUser, compact = false }) {
+  const [uploading, setUploading] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const inputRef = useRef(null)
+
+  const doUpload = async (file) => {
+    if (!file) return
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    if (!['pdf', 'docx', 'txt', 'md'].includes(ext)) {
+      toast.error('Only PDF, DOCX, TXT, or MD files are supported')
+      return
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error('File too large (max 8MB)')
+      return
+    }
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/profile/resume-upload', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Upload failed')
+      setUser(data.user)
+      localStorage.setItem('jobos_user', JSON.stringify(data.user))
+      toast.success(`Resume parsed — ${data.chars.toLocaleString()} characters extracted`)
+    } catch (e) {
+      toast.error(e.message)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const currentName = user?.resume_filename
+  const currentChars = user?.resume_text?.length || 0
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault(); setDragOver(false)
+        doUpload(e.dataTransfer.files?.[0])
+      }}
+      className={`rounded-xl border-2 border-dashed transition ${
+        dragOver ? 'border-foreground/60 bg-foreground/5' : 'border-border bg-background/30'
+      } ${compact ? 'p-4' : 'p-6'}`}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+        className="hidden"
+        onChange={(e) => doUpload(e.target.files?.[0])}
+      />
+      <div className={`flex ${compact ? 'items-center gap-4' : 'flex-col items-center text-center gap-3'}`}>
+        <div className={`${compact ? 'h-10 w-10' : 'h-12 w-12'} rounded-lg bg-foreground/5 flex items-center justify-center shrink-0`}>
+          {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileUp className="h-5 w-5" />}
+        </div>
+        <div className={compact ? 'flex-1 min-w-0' : ''}>
+          <p className="text-sm font-medium">
+            {currentName ? (
+              <>Resume: <span className="text-muted-foreground truncate">{currentName}</span></>
+            ) : uploading ? 'Parsing your resume...' : 'Upload your resume'}
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {currentChars > 0 && !uploading
+              ? `${currentChars.toLocaleString()} chars parsed · `
+              : ''}
+            Drag &amp; drop or click — PDF, DOCX, TXT, MD (max 8MB)
+          </p>
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size={compact ? 'sm' : 'default'}
+              variant={currentName ? 'outline' : 'default'}
+              onClick={() => inputRef.current?.click()}
+              disabled={uploading}
+            >
+              <Upload className="mr-1.5 h-3.5 w-3.5" />
+              {currentName ? 'Replace' : 'Choose file'}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{currentName ? 'Upload a new resume file' : 'Pick a PDF, DOCX, TXT or MD file'}</TooltipContent>
+        </Tooltip>
+      </div>
+    </div>
   )
 }
 
@@ -266,17 +392,17 @@ function AuthDialog({ open, onOpenChange, onAuth }) {
 }
 
 // ---------- Dashboard ----------
-function Dashboard({ token, user, onNav }) {
+function Dashboard({ token, user, setUser, onNav }) {
   const [stats, setStats] = useState(null)
   useEffect(() => {
     api('/dashboard/stats', { token }).then(setStats).catch(() => {})
   }, [token])
 
   const cards = [
-    { label: 'Applications', value: stats?.stats?.total ?? 0, icon: Briefcase, color: 'text-blue-400' },
-    { label: 'Interviews', value: stats?.stats?.interview ?? 0, icon: Target, color: 'text-amber-400' },
-    { label: 'Offers', value: stats?.stats?.offer ?? 0, icon: Trophy, color: 'text-green-400' },
-    { label: 'Resume Score', value: `${stats?.resume_score ?? 0}%`, icon: FileText, color: 'text-primary' },
+    { label: 'Applications', value: stats?.stats?.total ?? 0, icon: Briefcase },
+    { label: 'Interviews', value: stats?.stats?.interview ?? 0, icon: Target },
+    { label: 'Offers', value: stats?.stats?.offer ?? 0, icon: Trophy },
+    { label: 'Resume Score', value: `${stats?.resume_score ?? 0}%`, icon: FileText },
   ]
   return (
     <div className="container mx-auto px-6 py-8 max-w-7xl">
@@ -286,22 +412,32 @@ function Dashboard({ token, user, onNav }) {
           <p className="text-muted-foreground mt-1">Here&apos;s your career mission control.</p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => onNav('jobs')}><Sparkles className="mr-2 h-4 w-4" /> Discover Jobs</Button>
-          <Button variant="outline" onClick={() => onNav('tracker')}><Kanban className="mr-2 h-4 w-4" /> Open Tracker</Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button onClick={() => onNav('jobs')}><Sparkles className="mr-2 h-4 w-4" /> Discover Jobs</Button>
+            </TooltipTrigger>
+            <TooltipContent>Browse AI-ranked opportunities</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" onClick={() => onNav('tracker')}><Kanban className="mr-2 h-4 w-4" /> Open Tracker</Button>
+            </TooltipTrigger>
+            <TooltipContent>Open your Kanban board</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4 mt-8">
         {cards.map((c, i) => (
-          <Card key={i} className="card-glow border-white/5">
+          <Card key={i} className="card-glow">
             <CardContent className="p-5">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">{c.label}</p>
                   <p className="mt-2 text-3xl font-semibold tracking-tight">{c.value}</p>
                 </div>
-                <div className={`h-9 w-9 rounded-lg bg-white/5 flex items-center justify-center ${c.color}`}>
-                  <c.icon className="h-4 w-4" />
+                <div className="h-9 w-9 rounded-lg bg-foreground/5 flex items-center justify-center">
+                  <c.icon className="h-4 w-4 text-muted-foreground" />
                 </div>
               </div>
             </CardContent>
@@ -309,8 +445,24 @@ function Dashboard({ token, user, onNav }) {
         ))}
       </div>
 
+      {/* Resume Upload widget — front & center on dashboard */}
+      <Card className="card-glow mt-6">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            Your Resume
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResumeUploader token={token} user={user} setUser={setUser} />
+          <p className="text-xs text-muted-foreground mt-3">
+            Your resume powers every AI feature — match scoring, cover letters, and interview prep.
+          </p>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 md:grid-cols-3 mt-6">
-        <Card className="card-glow border-white/5 md:col-span-2">
+        <Card className="card-glow md:col-span-2">
           <CardHeader><CardTitle className="text-base">Pipeline Overview</CardTitle></CardHeader>
           <CardContent>
             <div className="space-y-4">
@@ -323,8 +475,8 @@ function Dashboard({ token, user, onNav }) {
                       <span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${s.dot}`} /> {s.label}</span>
                       <span className="text-muted-foreground">{val}</span>
                     </div>
-                    <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
-                      <div className={`h-full bg-gradient-to-r ${s.color.replace('/20','/60').replace('/5','/30')}`} style={{ width: `${(val / max) * 100}%` }} />
+                    <div className="h-1.5 rounded-full bg-foreground/5 overflow-hidden">
+                      <div className="h-full bg-foreground/60" style={{ width: `${(val / max) * 100}%` }} />
                     </div>
                   </div>
                 )
@@ -332,7 +484,7 @@ function Dashboard({ token, user, onNav }) {
             </div>
           </CardContent>
         </Card>
-        <Card className="card-glow border-white/5">
+        <Card className="card-glow">
           <CardHeader><CardTitle className="text-base">Quick Actions</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <Button variant="outline" className="w-full justify-start" onClick={() => onNav('jobs')}>
@@ -340,6 +492,9 @@ function Dashboard({ token, user, onNav }) {
             </Button>
             <Button variant="outline" className="w-full justify-start" onClick={() => onNav('profile')}>
               <User className="mr-2 h-4 w-4" /> Update your skills
+            </Button>
+            <Button variant="outline" className="w-full justify-start" onClick={() => onNav('interview')}>
+              <GraduationCap className="mr-2 h-4 w-4" /> Practice interview
             </Button>
             <Button variant="outline" className="w-full justify-start" onClick={() => onNav('tracker')}>
               <Kanban className="mr-2 h-4 w-4" /> Manage applications
@@ -746,6 +901,14 @@ function Profile({ token, user, setUser, models = [], defaultModel = 'gemini-2.5
   const [resumeText, setResumeText] = useState(user.resume_text || '')
   const [saving, setSaving] = useState(false)
 
+  useEffect(() => {
+    setName(user.name || '')
+    setTitle(user.title || '')
+    setLocation(user.location || '')
+    setSkills((user.skills || []).join(', '))
+    setResumeText(user.resume_text || '')
+  }, [user])
+
   const save = async () => {
     setSaving(true)
     try {
@@ -764,13 +927,7 @@ function Profile({ token, user, setUser, models = [], defaultModel = 'gemini-2.5
     finally { setSaving(false) }
   }
 
-  const handleFile = async (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const text = await file.text()
-    setResumeText(text.slice(0, 20000))
-    toast.success('Resume loaded. Click Save to persist.')
-  }
+  const handleFile = null // legacy — replaced by ResumeUploader
 
   return (
     <div className="container mx-auto px-6 py-8 max-w-4xl">
@@ -816,17 +973,18 @@ function Profile({ token, user, setUser, models = [], defaultModel = 'gemini-2.5
           </div>
 
           <div>
-            <label className="text-sm text-muted-foreground">Resume / Bio</label>
-            <Textarea value={resumeText} onChange={e => setResumeText(e.target.value)}
-              placeholder="Paste your resume content or a rich bio here..."
-              className="mt-1.5 min-h-[180px]" />
-            <div className="mt-2 flex items-center gap-2">
-              <input type="file" accept=".txt,.md" onChange={handleFile} className="hidden" id="resume-file" />
-              <label htmlFor="resume-file" className="text-xs cursor-pointer inline-flex items-center gap-1.5 text-primary hover:underline">
-                <FileText className="h-3 w-3" /> Import .txt / .md
-              </label>
-              <span className="text-xs text-muted-foreground">{resumeText.length} chars</span>
+            <label className="text-sm text-muted-foreground">Resume</label>
+            <div className="mt-1.5">
+              <ResumeUploader token={token} user={user} setUser={setUser} />
             </div>
+          </div>
+
+          <div>
+            <label className="text-sm text-muted-foreground">Or paste / edit resume text</label>
+            <Textarea value={resumeText} onChange={e => setResumeText(e.target.value)}
+              placeholder="Your parsed resume will appear here. You can edit or paste text directly."
+              className="mt-1.5 min-h-[180px]" />
+            <p className="text-xs text-muted-foreground mt-1">{resumeText.length} chars</p>
           </div>
 
           <Button onClick={save} disabled={saving} className="w-full sm:w-auto">
@@ -1129,7 +1287,7 @@ function App() {
       <NavBar user={user} onLogout={logout} onNav={setNav} current={nav} />
       <AnimatePresence mode="wait">
         <motion.div key={nav} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
-          {nav === 'dashboard' && <Dashboard token={token} user={user} onNav={setNav} />}
+          {nav === 'dashboard' && <Dashboard token={token} user={user} setUser={setUser} onNav={setNav} />}
           {nav === 'jobs' && <Jobs token={token} user={user} onOpenMatch={setMatchJob} onRefreshApps={() => setAppsKey(k => k + 1)} />}
           {nav === 'tracker' && <Tracker token={token} refreshKey={appsKey} />}
           {nav === 'interview' && <Interview token={token} user={user} models={models} defaultModel={defaultModel} />}
