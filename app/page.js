@@ -143,11 +143,10 @@ function NavBar({ user, onGetStarted, onLogout, onNav, current }) {
                   <TooltipTrigger asChild>
                     <button
                       onClick={() => onNav(item.key)}
-                      className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition ${
-                        current === item.key
-                          ? 'bg-foreground/10 text-foreground'
-                          : 'text-muted-foreground hover:text-foreground hover:bg-foreground/5'
-                      }`}
+                      className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition ${current === item.key
+                        ? 'bg-foreground/10 text-foreground'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-foreground/5'
+                        }`}
                     >
                       <item.icon className="h-3.5 w-3.5" />
                       {item.label}
@@ -243,9 +242,8 @@ function ResumeUploader({ token, user, setUser, compact = false }) {
         e.preventDefault(); setDragOver(false)
         doUpload(e.dataTransfer.files?.[0])
       }}
-      className={`rounded-xl border-2 border-dashed transition ${
-        dragOver ? 'border-foreground/60 bg-foreground/5' : 'border-border bg-background/30'
-      } ${compact ? 'p-4' : 'p-6'}`}
+      className={`rounded-xl border-2 border-dashed transition ${dragOver ? 'border-foreground/60 bg-foreground/5' : 'border-border bg-background/30'
+        } ${compact ? 'p-4' : 'p-6'}`}
     >
       <input
         ref={inputRef}
@@ -315,6 +313,10 @@ function AuthDialog({ open, onOpenChange, onAuth }) {
   useEffect(() => {
     if (!open) return
     const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+    console.log(
+      "NEXT_PUBLIC_GOOGLE_CLIENT_ID =",
+      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+    )
     if (!clientId) return
     const init = () => {
       if (!window.google?.accounts?.id || !btnRef.current) return
@@ -404,7 +406,7 @@ function Dashboard({ token, user, setUser, onNav, models, defaultModel }) {
   const [analysis, setAnalysis] = useState(user.last_resume_analysis?.analysis || null)
 
   useEffect(() => {
-    api('/dashboard/stats', { token }).then(setStats).catch(() => {})
+    api('/dashboard/stats', { token }).then(setStats).catch(() => { })
   }, [token])
 
   useEffect(() => {
@@ -548,7 +550,7 @@ function Dashboard({ token, user, setUser, onNav, models, defaultModel }) {
                     <circle cx="50" cy="50" r="42" strokeWidth="8" className="stroke-foreground/10 fill-none" />
                     <circle cx="50" cy="50" r="42" strokeWidth="8" strokeLinecap="round"
                       className={`fill-none transition-all ${aiScore >= 75 ? 'stroke-green-500' : aiScore >= 55 ? 'stroke-amber-500' : 'stroke-red-500'}`}
-                      strokeDasharray={`${((aiScore||0)/100)*264} 264`} />
+                      strokeDasharray={`${((aiScore || 0) / 100) * 264} 264`} />
                   </svg>
                   <div className="absolute inset-0 flex items-center justify-center text-xl font-semibold">{aiScore ?? '—'}</div>
                 </div>
@@ -963,7 +965,7 @@ function MatchDialog({ open, job, token, user, onClose, onAddedToTracker, models
                   <circle cx="50" cy="50" r="42" strokeWidth="8" className="stroke-white/10 fill-none" />
                   <circle cx="50" cy="50" r="42" strokeWidth="8" strokeLinecap="round"
                     className={`fill-none ${ring} transition-all`}
-                    strokeDasharray={`${(pct/100)*264} 264`} />
+                    strokeDasharray={`${(pct / 100) * 264} 264`} />
                 </svg>
                 <div className={`absolute inset-0 flex items-center justify-center text-2xl font-semibold ${color}`}>{pct}%</div>
               </div>
@@ -1097,9 +1099,8 @@ function Tracker({ token, refreshKey }) {
                   if (app) moveTo(app, stage.key)
                   setDragOver(null)
                 }}
-                className={`rounded-xl border p-3 min-h-[400px] transition ${
-                  dragOver === stage.key ? 'border-primary/50 bg-primary/5' : 'border-white/5 bg-white/[0.02]'
-                }`}
+                className={`rounded-xl border p-3 min-h-[400px] transition ${dragOver === stage.key ? 'border-primary/50 bg-primary/5' : 'border-white/5 bg-white/[0.02]'
+                  }`}
               >
                 <div className="flex items-center justify-between mb-3 px-1">
                   <div className="flex items-center gap-2">
@@ -1275,7 +1276,7 @@ function Interview({ token, user, models, defaultModel }) {
   const [listening, setListening] = useState(false)
 
   useEffect(() => {
-    api('/interview/rounds').then(d => setRounds(d.rounds || [])).catch(() => {})
+    api('/interview/rounds').then(d => setRounds(d.rounds || [])).catch(() => { })
   }, [])
 
   const speak = (text) => {
@@ -1524,11 +1525,11 @@ function App() {
     const t = localStorage.getItem('jobos_token')
     const u = localStorage.getItem('jobos_user')
     if (t && u) { setToken(t); setUser(JSON.parse(u)) }
-    api('/models').then(d => { setModels(d.models || []); if (d.default) setDefaultModel(d.default) }).catch(() => {})
+    api('/models').then(d => { setModels(d.models || []); if (d.default) setDefaultModel(d.default) }).catch(() => { })
     // Auto-detect country (from headers / user pref / localStorage)
     const saved = typeof window !== 'undefined' ? localStorage.getItem('jobos_country') : null
     if (saved) setCountry(saved)
-    else api('/geo').then(d => { if (d.country) setCountry(d.country) }).catch(() => {})
+    else api('/geo').then(d => { if (d.country) setCountry(d.country) }).catch(() => { })
   }, [])
 
   useEffect(() => {
