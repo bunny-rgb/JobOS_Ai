@@ -7,21 +7,23 @@
 		"nodejs_compat",
 		"global_fetch_strictly_public"
 	],
+	"vars": {
+		"NEXT_PUBLIC_GOOGLE_CLIENT_ID": "782932650752-a1nus5hfen93ni1iji5r418796bkugna.apps.googleusercontent.com",
+		"DB_NAME": "jobos_ai",
+		"NEXT_PUBLIC_BASE_URL": "https://jobos-ai.pachourimohit1.workers.dev",
+		"CORS_ORIGINS": "*"
+	},
 	"assets": {
 		"directory": ".open-next/assets",
 		"binding": "ASSETS"
 	},
 	"services": [
 		{
-			// Self-reference service binding, the service name must match the worker name
-			// see https://opennext.js.org/cloudflare/caching
 			"binding": "WORKER_SELF_REFERENCE",
 			"service": "jobos-ai"
 		}
 	],
 	"images": {
-		// Enable image optimization
-		// see https://opennext.js.org/cloudflare/howtos/image
 		"binding": "IMAGES"
 	}
 }
